@@ -84,6 +84,12 @@ pub struct Game {
     pub debug_light: (u8, u8),
     pub ents: crate::entity::Entities,
     pub particles: crate::particles::Particles,
+    pub creative_tab: usize,
+    pub difficulty: u8,
+    pub rules: HashMap<String, String>,
+    pub tab_cycle: Option<(String, usize)>,
+    pub chat_scroll: usize,
+    pub creative_search: String,
     pub hand_item: u16,
     pub hand_height: f32,
     pub hand_prev_height: f32,
@@ -134,7 +140,7 @@ impl Game {
             selected: 0, health: 20.0, hunger: 20.0, time_ticks: 1000.0, target: None, mining: None, swing_ticks: -1, prev_swing: 0.0,
             break_cooldown: 0, place_cooldown: 0, tick_acc: 0.0, partial: 0.0, left_down: false, right_down: false, chat: Vec::new(), chat_input: String::new(),
             chat_history: Vec::new(), show_debug: false, hide_hud: false, item_name_timer: 0.0, 
-            last_w: -10.0, last_space: -10.0, clock: 0.0, debug_light: (0, 0), debug_ents: 0, target_mob: None, debug_timer: 0.0, ents: Default::default(), particles: Default::default(), hand_item: 0, hand_height: 1.0, hand_prev_height: 1.0, x_bob: 0.0, y_bob: 0.0, prev_x_bob: 0.0, prev_y_bob: 0.0, populated: HashSet::new(), fires: HashMap::new(), attack_ticker: 100, use_ticks: 0, left_clicked: false, player_invuln: 0, player_hurt: 0, player_burning: 0, spawn_timer: 0, rng: worldgen::random::Xoro::new(0xC0FFEE),
+            last_w: -10.0, last_space: -10.0, clock: 0.0, debug_light: (0, 0), debug_ents: 0, target_mob: None, debug_timer: 0.0, ents: Default::default(), particles: Default::default(), creative_tab: 0, difficulty: 2, rules: HashMap::new(), tab_cycle: None, chat_scroll: 0, creative_search: String::new(), hand_item: 0, hand_height: 1.0, hand_prev_height: 1.0, x_bob: 0.0, y_bob: 0.0, prev_x_bob: 0.0, prev_y_bob: 0.0, populated: HashSet::new(), fires: HashMap::new(), attack_ticker: 100, use_ticks: 0, left_clicked: false, player_invuln: 0, player_hurt: 0, player_burning: 0, spawn_timer: 0, rng: worldgen::random::Xoro::new(0xC0FFEE),
             gen_tx, gen_rx, mesh_tx, mesh_rx, gen_inflight: HashSet::new(), mesh_inflight: HashSet::new(), meshed: HashMap::new(),
             dirty: HashSet::new(), version: 0,
         }
@@ -529,109 +535,5 @@ impl Game {
             time_angle: phi,
         };
         (sky, 0.2 + 0.8 * f)
-    }
-
-    // ------------------------------------------------------------ commands
-
-    pub fn run_command(&mut self, line: &str) {
-        let parts: Vec<&str> = line.trim_start_matches('/').split_whitespace().collect();
-        let Some(cmd) = parts.first() else { return };
-        let rel = |s: &str, base: f64| -> Option<f64> {
-            if let Some(r) = s.strip_prefix('~') { Some(base + if r.is_empty() { 0.0 } else { r.parse::<f64>().ok()? }) } else { s.parse().ok() }
-        };
-        match *cmd {
-            "help" => self.say("Commands: /gamemode /time /tp /give /setblock /fill /clear /seed /kill /say /spawn /gamerule"),
-            "gamemode" | "gm" => match parts.get(1).copied() {
-                Some("creative" | "c" | "1") => { self.set_mode(Mode::Creative); self.say("Set own game mode to Creative Mode"); }
-                Some("survival" | "s" | "0") => { self.set_mode(Mode::Survival); self.say("Set own game mode to Survival Mode"); }
-                _ => self.say("§cUsage: /gamemode <survival|creative>"),
-            },
-            "time" => {
-                let day = (self.time_ticks / 24000.0).floor() * 24000.0;
-                match (parts.get(1).copied(), parts.get(2).copied()) {
-                    (Some("set"), Some(v)) => {
-                        let t = match v { "day" => Some(1000.0), "noon" => Some(6000.0), "night" => Some(13000.0), "midnight" => Some(18000.0), n => n.parse::<f64>().ok() };
-                        match t { Some(t) => { self.time_ticks = day + t; self.say(&format!("Set the time to {}", t as i64)); } None => self.say("§cInvalid time") }
-                    }
-                    (Some("add"), Some(v)) => match v.parse::<f64>() { Ok(n) => { self.time_ticks += n; self.say(&format!("Set the time to {}", (self.time_ticks % 24000.0) as i64)); } Err(_) => self.say("§cInvalid time") },
-                    (Some("query"), _) => { let t = self.time_ticks; self.say(&format!("The time is {} (day {})", (t % 24000.0) as i64, (t / 24000.0) as i64)); }
-                    _ => self.say("§cUsage: /time <set|add|query> ..."),
-                }
-            }
-            "tp" | "teleport" => {
-                if parts.len() >= 4 {
-                    let p = self.player.pos;
-                    match (rel(parts[1], p.x), rel(parts[2], p.y), rel(parts[3], p.z)) {
-                        (Some(x), Some(y), Some(z)) => { self.player.pos = DVec3::new(x, y, z); self.player.vel = DVec3::ZERO; self.say(&format!("Teleported to {x:.2}, {y:.2}, {z:.2}")); }
-                        _ => self.say("§cInvalid coordinates"),
-                    }
-                } else { self.say("§cUsage: /tp <x> <y> <z>"); }
-            }
-            "give" => {
-                let name = parts.get(1).copied().unwrap_or("");
-                let count: u8 = parts.get(2).and_then(|c| c.parse().ok()).unwrap_or(1).min(64);
-                match crate::items::id_by_name(name) {
-                    Some(id) => { if self.add_to_inventory(id, count) { self.say(&format!("Gave {count} [{}]", blocks::display_name(crate::items::name_of(id)))); } else { self.say("§cInventory full"); } }
-                    None => self.say(&format!("§cUnknown item '{name}'")),
-                }
-            }
-            "summon" => {
-                let kind = match parts.get(1).map(|s| s.trim_start_matches("minecraft:")) {
-                    Some("zombie") => Some(crate::entity::Kind::Zombie), Some("skeleton") => Some(crate::entity::Kind::Skeleton),
-                    Some("creeper") => Some(crate::entity::Kind::Creeper), Some("pig") => Some(crate::entity::Kind::Pig),
-                    Some("cow") => Some(crate::entity::Kind::Cow), Some("sheep") => Some(crate::entity::Kind::Sheep),
-                    Some("chicken") => Some(crate::entity::Kind::Chicken), _ => None,
-                };
-                match kind {
-                    Some(k) => {
-                        let d = self.player.look_dir();
-                        let p = self.player.pos + DVec3::new(d.x as f64 * 3.0, 0.5, d.z as f64 * 3.0);
-                        self.spawn_mob(k, p);
-                        self.say(&format!("Summoned {}", crate::entity::stats(k).name));
-                    }
-                    None => self.say("§cUsage: /summon <zombie|skeleton|creeper|pig|cow|sheep|chicken>"),
-                }
-            }
-            "kill" if parts.get(1) == Some(&"@e") => { let n = self.ents.mobs.len(); self.ents.mobs.clear(); self.say(&format!("Killed {n} entities")); }
-            "setblock" => {
-                if parts.len() >= 5 {
-                    let p = self.player.pos;
-                    let id = blocks::BLOCKS.iter().position(|b| b.name == parts[4].trim_start_matches("minecraft:"));
-                    match (rel(parts[1], p.x.floor()), rel(parts[2], p.y.floor()), rel(parts[3], p.z.floor()), id) {
-                        (Some(x), Some(y), Some(z), Some(id)) => {
-                            let (x, y, z) = (x.floor() as i32, y.floor() as i32, z.floor() as i32);
-                            if self.world.set(x, y, z, id as u16) { self.mark_dirty(x, z); self.say(&format!("Changed the block at {x}, {y}, {z}")); } else { self.say("§cThat position is not loaded"); }
-                        }
-                        _ => self.say("§cUsage: /setblock <x> <y> <z> <block>"),
-                    }
-                } else { self.say("§cUsage: /setblock <x> <y> <z> <block>"); }
-            }
-            "fill" => {
-                if parts.len() >= 8 {
-                    let p = self.player.pos;
-                    let c: Vec<Option<f64>> = (0..6).map(|i| rel(parts[1 + i], [p.x, p.y, p.z][i % 3].floor())).collect();
-                    let id = blocks::BLOCKS.iter().position(|b| b.name == parts[7].trim_start_matches("minecraft:"));
-                    if c.iter().all(|v| v.is_some()) && id.is_some() {
-                        let c: Vec<i32> = c.iter().map(|v| v.unwrap().floor() as i32).collect();
-                        let (lo, hi) = ([c[0].min(c[3]), c[1].min(c[4]), c[2].min(c[5])], [c[0].max(c[3]), c[1].max(c[4]), c[2].max(c[5])]);
-                        let vol = (hi[0] - lo[0] + 1) as i64 * (hi[1] - lo[1] + 1) as i64 * (hi[2] - lo[2] + 1) as i64;
-                        if vol > 32768 { self.say("§cToo many blocks (max 32768)"); } else {
-                            let mut n = 0;
-                            for x in lo[0]..=hi[0] { for y in lo[1]..=hi[1] { for z in lo[2]..=hi[2] {
-                                if self.world.set(x, y, z, id.unwrap() as u16) { n += 1; self.mark_dirty(x, z); }
-                            } } }
-                            self.say(&format!("{n} blocks filled"));
-                        }
-                    } else { self.say("§cUsage: /fill <x1 y1 z1> <x2 y2 z2> <block>"); }
-                } else { self.say("§cUsage: /fill <x1 y1 z1> <x2 y2 z2> <block>"); }
-            }
-            "clear" => { self.slots = [None; 36]; self.say("Cleared the inventory"); }
-            "seed" => self.say(&format!("Seed: [§a{}§r]", crate::SEED)),
-            "kill" => { self.say("Ouch. That looked like it hurt."); self.health = 0.0; self.hurt(0.0); }
-            "spawn" => { self.player.pos = self.spawn; self.player.vel = DVec3::ZERO; self.say("Teleported to spawn"); }
-            "say" => { let m = parts[1..].join(" "); self.say(&format!("[Player] {m}")); }
-            "gamerule" => self.say("Game rules are not implemented yet"),
-            other => self.say(&format!("§cUnknown command: /{other}. Try /help")),
-        }
     }
 }

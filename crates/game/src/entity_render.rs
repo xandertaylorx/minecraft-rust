@@ -54,7 +54,7 @@ pub fn build_entity_atlas(a: &mut Assets, block_atlas: &RgbaImage) -> EntityAtla
     let iy = 512u32;
     for (i, it) in ITEMS.iter().enumerate() {
         let img = a.image(&format!("textures/item/{}.png", it.name)).unwrap_or_else(|| RgbaImage::new(16, 16));
-        let (px, py) = (((i as u32 % 48) * 17) as i64, (iy + (i as u32 / 48) * 17) as i64);
+        let (px, py) = (260 + ((i as u32 % 40) * 17) as i64, (iy + (i as u32 / 40) * 17) as i64);
         image::imageops::replace(&mut image, &img, px, py);
         item_rects.push([px as f32, py as f32, 16.0, 16.0]);
         item_images.push(img);
@@ -62,19 +62,19 @@ pub fn build_entity_atlas(a: &mut Assets, block_atlas: &RgbaImage) -> EntityAtla
     for n in 0..3u32 {
         let img = a.image(&format!("textures/item/bow_pulling_{n}.png")).unwrap_or_else(|| RgbaImage::new(16, 16));
         let i = (ITEMS.len() as u32) + n;
-        let (px, py) = (((i % 48) * 17) as i64, (iy + (i / 48) * 17) as i64);
+        let (px, py) = (260 + ((i % 40) * 17) as i64, (iy + (i / 40) * 17) as i64);
         image::imageops::replace(&mut image, &img, px, py);
         bow_rects.push([px as f32, py as f32, 16.0, 16.0]);
         item_images.push(img);
     }
     let mut particle_rects = HashMap::new();
-    let (mut px, mut py) = (0u32, 680u32);
+    let (mut px, mut py) = (260u32, 700u32);
     let mut names: Vec<String> = (0..16).map(|i| format!("explosion_{i}")).collect();
     names.extend((0..12).map(|i| format!("big_smoke_{i}")));
     names.push("flame".to_string());
     for n in names {
         let Some(img) = a.image(&format!("textures/particle/{n}.png")) else { continue };
-        if px + img.width() > ENT_ATLAS { px = 0; py += 34; }
+        if px + img.width() > ENT_ATLAS { px = 260; py += 34; }
         image::imageops::replace(&mut image, &img, px as i64, py as i64);
         particle_rects.insert(n, [px as f32, py as f32, img.width() as f32, img.height() as f32]);
         px += img.width() + 1;

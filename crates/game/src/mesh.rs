@@ -67,7 +67,7 @@ fn tile_uv(tile: u32, uv: [f32; 2]) -> [f32; 2] {
     let (tx, ty) = ((tile % 16) as f32, (tile / 16) as f32);
     // Inset slightly to avoid sampling the neighbouring tile.
     let e = 0.002;
-    [(tx + e + uv[0] * (1.0 - 2.0 * e)) / 16.0, (ty + e + uv[1] * (1.0 - 2.0 * e)) / 16.0]
+    [(tx + e + uv[0] * (1.0 - 2.0 * e)) / 16.0, (ty + e + uv[1] * (1.0 - 2.0 * e)) / crate::ATLAS_ROWS as f32]
 }
 
 pub fn mesh_chunk(region: &Region, light: &Light, tiles: &Tiles) -> MeshData {
@@ -99,7 +99,9 @@ pub fn mesh_chunk(region: &Region, light: &Light, tiles: &Tiles) -> MeshData {
                 }
                 if d.cross {
                     let tile = (tiles.lookup)(d.top);
-                    emit_cross(&mut out.opaque, light, rx, y, rz, tile);
+                    let col = (z * 16 + x) as usize;
+                    let ct = if d.tint == Tint::Grass { grass[col] } else { [1.0; 3] };
+                    emit_cross(&mut out.opaque, light, rx, y, rz, tile, ct);
                     continue;
                 }
                 for (fi, f) in FACES.iter().enumerate() {
@@ -107,7 +109,7 @@ pub fn mesh_chunk(region: &Region, light: &Light, tiles: &Tiles) -> MeshData {
                     let nid = region.block(nx, ny, nz);
                     let nd = def(nid);
                     if nd.opaque { continue; }
-                    if nid == id && (d.translucent || d.name == "oak_leaves" || d.name == "glass") { continue; }
+                    if nid == id && d.cull_same { continue; }
                     // Fluids drop below the top: skip rendering sides against solid air-less cases handled above.
                     let tex = match fi { 0 => d.top, 1 => d.bottom, _ => d.side };
                     let tile = (tiles.lookup)(tex);
@@ -117,6 +119,8 @@ pub fn mesh_chunk(region: &Region, light: &Light, tiles: &Tiles) -> MeshData {
                         Tint::Grass => if fi == 0 { grass[col] } else { [1.0; 3] },
                         Tint::Foliage => foliage[col],
                         Tint::Water => water[col],
+                        Tint::Birch => [0.502, 0.655, 0.333],
+                        Tint::Spruce => [0.380, 0.600, 0.380],
                     };
                     let target = if d.translucent { &mut out.translucent } else { &mut out.opaque };
                     let wh = if d.name == "water" && region.block(rx, y + 1, rz) != id { 8.0 / 9.0 } else { 1.0 };
@@ -184,7 +188,7 @@ fn emit(
 }
 
 /// Two diagonal quads (fire, plants), double sided.
-fn emit_cross(target: &mut (Vec<Vertex>, Vec<u32>), light: &Light, rx: i32, y: i32, rz: i32, tile: u32) {
+fn emit_cross(target: &mut (Vec<Vertex>, Vec<u32>), light: &Light, rx: i32, y: i32, rz: i32, tile: u32, tint: [f32; 3]) {
     let (s, b) = light.at(rx, y, rz);
     let (lx, lz) = ((rx - 16) as f32, (rz - 16) as f32);
     let ly = y as f32;
@@ -195,7 +199,7 @@ fn emit_cross(target: &mut (Vec<Vertex>, Vec<u32>), light: &Light, rx: i32, y: i
         let corners = [[a[0], 1.0, a[1]], [c[0], 1.0, c[1]], [c[0], 0.0, c[1]], [a[0], 0.0, a[1]]];
         let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         for k in 0..4 {
-            target.0.push(Vertex { pos: [lx + corners[k][0], ly + corners[k][1], lz + corners[k][2]], uv: tile_uv(tile, uvs[k]), color: [1.0; 4], light: [s as f32, b as f32] });
+            target.0.push(Vertex { pos: [lx + corners[k][0], ly + corners[k][1], lz + corners[k][2]], uv: tile_uv(tile, uvs[k]), color: [tint[0], tint[1], tint[2], 1.0], light: [s as f32, b as f32] });
         }
         target.1.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }

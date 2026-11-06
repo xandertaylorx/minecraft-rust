@@ -1,7 +1,9 @@
 mod assets;
 mod blocks;
 mod ai;
+mod commands;
 mod entity;
+mod features;
 mod entity_render;
 mod game;
 mod gameplay;
@@ -40,6 +42,7 @@ use ui::{Action, Click, FrameInfo};
 use world::generate;
 
 pub const SEED: i64 = 4_815_162_342;
+pub const ATLAS_ROWS: u32 = 64;
 
 fn jar_path() -> &'static str {
     ["assets/client.jar", "assets/minecraft-1.21.11-resources.jar"]
@@ -57,8 +60,8 @@ fn build_atlas(a: &mut Assets) -> Atlas {
     }
     names.push("fire_1");
     for i in 0..10 { names.push(Box::leak(format!("destroy_stage_{i}").into_boxed_str())); }
-    assert!(names.len() <= 256);
-    let mut image = RgbaImage::new(256, 256);
+    assert!(names.len() <= 16 * ATLAS_ROWS as usize);
+    let mut image = RgbaImage::new(256, 16 * ATLAS_ROWS);
     let mut map = HashMap::new();
     for (i, n) in names.iter().enumerate() {
         let tile = a.block_tile(n);
@@ -232,10 +235,11 @@ fn screenshot_mode(args: &[String]) {
         Some("options") => game.screen = Screen::Options,
         Some("creative") => game.screen = Screen::Creative,
         Some("inventory") => { game.screen = Screen::Inventory; game.mode = Mode::Survival; }
-        Some("chat") => { game.screen = Screen::Chat; game.chat_input = "/gamemode creative".into(); }
+        Some("chat") => { game.screen = Screen::Chat; game.chat_input = val("--chat-text").unwrap_or("/fill ".into()); }
         _ => {}
     }
     if args.iter().any(|a| a == "--f3") { game.show_debug = true; game.debug_light = (15, 0); }
+    if let Some(cmds) = val("--run") { for c in cmds.split(';') { game.say(&format!("§7> {c}")); game.run_command(c.trim()); } }
     if args.iter().any(|a| a == "--chat") {
         for l in ["§eWelcome to Minecraft (Rust)!", "Set the time to 13000", "<Steve> hello world"] { game.say(l); }
     }
@@ -482,11 +486,19 @@ impl State {
             Action::Slot(i) => { let g = &mut self.game; std::mem::swap(&mut g.cursor, &mut g.slots[i]); }
             Action::CreativeItem(id) => self.game.cursor = Some(game::Stack::new(id, if items::max_stack(id) == 1 { 1 } else { 64 })),
             Action::CreativeScroll => {}
+            Action::CreativeTab(i) => { self.game.creative_tab = i; self.creative_scroll = 0; }
         }
     }
 
     fn key(&mut self, code: KeyCode, down: bool, repeat: bool, text: Option<&str>) {
         let now = self.game.clock;
+        if self.game.screen == Screen::Creative && self.game.creative_tab == 6 && down {
+            match code {
+                KeyCode::Backspace => { self.game.creative_search.pop(); return; }
+                KeyCode::Escape => {}
+                _ => if let Some(t) = text { for c in t.chars().filter(|c| !c.is_control()) { if self.game.creative_search.len() < 32 { self.game.creative_search.push(c); } } if !t.is_empty() { return; } },
+            }
+        }
         if self.game.screen == Screen::Chat {
             if !down { return; }
             match code {
@@ -500,7 +512,21 @@ impl State {
                     self.history_idx = None;
                     self.set_screen(Screen::Playing);
                 }
-                KeyCode::Backspace => { self.game.chat_input.pop(); }
+                KeyCode::Tab => {
+                    let base = self.game.tab_cycle.as_ref().map(|c| c.0.clone()).unwrap_or_else(|| self.game.chat_input.clone());
+                    if let Some(s) = crate::commands::suggest(&self.game, &base) {
+                        if !s.items.is_empty() {
+                            let i = self.game.tab_cycle.as_ref().map(|c| c.1 + 1).unwrap_or(0) % s.items.len();
+                            let mut out = base[..s.from.min(base.len())].to_string();
+                            out.push_str(&s.items[i]);
+                            if s.from > 1 || s.items.len() == 1 { out.push(' '); }
+                            self.game.chat_input = out;
+                            self.game.tab_cycle = Some((base, i));
+                            return;
+                        }
+                    }
+                }
+                KeyCode::Backspace => { self.game.tab_cycle = None; self.game.chat_input.pop(); }
                 KeyCode::ArrowUp => {
                     let n = self.game.chat_history.len();
                     if n > 0 { let i = self.history_idx.map(|i| i.saturating_sub(1)).unwrap_or(n - 1); self.history_idx = Some(i); self.game.chat_input = self.game.chat_history[i].clone(); }
@@ -509,7 +535,7 @@ impl State {
                     let n = self.game.chat_history.len();
                     match self.history_idx { Some(i) if i + 1 < n => { self.history_idx = Some(i + 1); self.game.chat_input = self.game.chat_history[i + 1].clone(); } _ => { self.history_idx = None; self.game.chat_input.clear(); } }
                 }
-                _ => if let Some(t) = text { for c in t.chars().filter(|c| !c.is_control()) { if self.game.chat_input.len() < 256 { self.game.chat_input.push(c); } } },
+                _ => if let Some(t) = text { for c in t.chars().filter(|c| !c.is_control()) { if self.game.chat_input.len() < 256 { self.game.tab_cycle = None; self.game.chat_input.push(c); } } },
             }
             return;
         }

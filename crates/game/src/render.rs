@@ -182,9 +182,10 @@ fn atlas_mips(img: &RgbaImage) -> Vec<RgbaImage> {
     for l in 1..MIP_LEVELS {
         let size = img.width() >> l;
         let tile = 16u32 >> l;
+        let rows = img.height() / 16;
         let prev = &levels[(l - 1) as usize];
-        let mut out = RgbaImage::new(size, size);
-        for ty in 0..16 {
+        let mut out = RgbaImage::new(size, img.height() >> l);
+        for ty in 0..rows {
             for tx in 0..16 {
                 for y in 0..tile {
                     for x in 0..tile {
@@ -739,7 +740,7 @@ impl Renderer {
             for (corners, _) in faces {
                 let q: Vec<Vertex> = corners.iter().zip(uvs).map(|(c, uv)| Vertex {
                     pos: [c[0] + (c[0] * 2.0 - 1.0) * e, c[1] + (c[1] * 2.0 - 1.0) * e, c[2] + (c[2] * 2.0 - 1.0) * e],
-                    uv: [(tx + uv[0]) / 16.0, (ty + uv[1]) / 16.0], color: [1.0; 4], light: [15.0, 0.0],
+                    uv: [(tx + uv[0]) / 16.0, (ty + uv[1]) / crate::ATLAS_ROWS as f32], color: [1.0; 4], light: [15.0, 0.0],
                 }).collect();
                 for i in [0, 1, 2, 0, 2, 3] { verts.push(q[i]); }
             }

@@ -49,6 +49,12 @@ impl OverworldGen {
         }
     }
 
+    /// Biome id at a block position (vanilla BiomeManager zoom), for `/locate`.
+    pub fn biome_at(&self, x: i32, y: i32, z: i32) -> u16 {
+        let src = BiomeSource { table: &self.biomes, router: &self.router, zoom_seed: self.zoom_seed, cache: Default::default() };
+        src.biome_at(x, y, z)
+    }
+
     fn pid(&self, name: &str) -> u16 { self.palette.iter().position(|n| n == name).unwrap() as u16 }
 
     fn eval_for_chunk(&self, cx: i32, cz: i32) -> Eval {

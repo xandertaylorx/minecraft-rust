@@ -7,7 +7,7 @@ use crate::gui::Gui;
 pub enum Action {
     Singleplayer, Quit, Resume, OpenOptions, CloseOptions, SaveQuit,
     Fov, RenderDistance, Sensitivity, GuiScale, Brightness, Clouds, Bobbing,
-    Slot(usize), CreativeItem(u16), CreativeScroll,
+    Slot(usize), CreativeItem(u16), CreativeScroll, CreativeTab(usize),
 }
 
 pub struct Click {
@@ -241,7 +241,28 @@ fn chat(game: &Game, g: &mut Gui) {
         let (w, h) = g.size();
         g.rect(2.0, h - 14.0, w - 4.0, 12.0, [0.0, 0.0, 0.0, 0.55]);
         let caret = if (game.clock * 2.0) as i32 % 2 == 0 { "_" } else { "" };
-        g.text(&format!("{}{}", game.chat_input, caret), 4.0, h - 12.0, WHITE, true);
+        let typed = g.text(&game.chat_input, 4.0, h - 12.0, WHITE, true);
+        let _ = typed;
+        let tw = g.atlas.text_width(&game.chat_input);
+        let sug = crate::commands::suggest(game, &game.chat_input);
+        if let Some(s) = &sug {
+            if !s.usage.is_empty() && s.items.is_empty() || (!s.usage.is_empty() && game.chat_input.ends_with(' ')) {
+                g.text(&s.usage, 4.0 + tw + 1.0, h - 12.0, [0.4, 0.4, 0.4], false);
+            }
+            if !s.items.is_empty() {
+                let n = s.items.len().min(10);
+                let pw = s.items.iter().take(n).map(|i| g.atlas.text_width(i)).fold(0.0, f32::max) + 4.0;
+                let px = (4.0 + g.atlas.text_width(&game.chat_input[..s.from.min(game.chat_input.len())])).min(w - pw - 2.0);
+                let py = h - 16.0 - n as f32 * 12.0;
+                g.rect(px, py, pw, n as f32 * 12.0 + 2.0, [0.0, 0.0, 0.0, 0.8]);
+                let sel = game.tab_cycle.as_ref().map(|c| c.1 % s.items.len()).unwrap_or(0);
+                for (i, it) in s.items.iter().take(n).enumerate() {
+                    let col = if i == sel { [1.0, 1.0, 0.33] } else { [0.67, 0.67, 0.67] };
+                    g.text(it, px + 2.0, py + 2.0 + i as f32 * 12.0, col, true);
+                }
+            }
+        }
+        if !caret.is_empty() { g.text("_", 4.0 + tw, h - 12.0, WHITE, true); }
     }
 }
 
@@ -325,15 +346,52 @@ fn tooltip_for_slots(game: &Game, g: &mut Gui, info: &FrameInfo, _x: f32, _y: f3
     let _ = (game, g, info);
 }
 
+pub const CREATIVE_TABS: [&str; 7] = ["Building Blocks", "Natural Blocks", "Colored Blocks", "Functional Blocks", "Tools & Combat", "Food & Materials", "Search Items"];
+
+pub fn creative_list(game: &Game) -> Vec<u16> {
+    use crate::items::{self, Kind};
+    let blocks_in = |cat: u8| -> Vec<u16> { blocks::creative_items().into_iter().filter(|&i| BLOCKS[i as usize].category == cat).collect() };
+    match game.creative_tab {
+        0 => blocks_in(0),
+        1 => blocks_in(1),
+        2 => blocks_in(2),
+        3 => blocks_in(3),
+        4 => items::all_item_ids().filter(|&i| matches!(items::item_def(i).map(|d| d.kind), Some(Kind::Sword | Kind::Pickaxe | Kind::Axe | Kind::Shovel | Kind::Hoe | Kind::Bow | Kind::Arrow | Kind::FlintSteel))).collect(),
+        5 => items::all_item_ids().filter(|&i| matches!(items::item_def(i).map(|d| d.kind), Some(Kind::Food(_) | Kind::Misc))).collect(),
+        _ => {
+            let q = game.creative_search.to_lowercase().replace(' ', "_");
+            let mut all = blocks::creative_items();
+            all.extend(items::all_item_ids());
+            all.into_iter().filter(|&i| q.is_empty() || items::name_of(i).contains(&q)).collect()
+        }
+    }
+}
+
 fn creative(game: &Game, g: &mut Gui, info: &FrameInfo, clicks: &mut Vec<Click>) {
     dim(g, 0.45);
     let (w, h) = g.size();
     let (x, y) = ((w - 195.0).floor() / 2.0, ((h - 136.0) / 2.0).floor());
+    // Tabs along the top edge.
+    let tab_icons: [u16; 7] = [blocks::id_of("bricks"), blocks::id_of("grass_block"), blocks::id_of("red_wool"), blocks::id_of("crafting_table"),
+        crate::items::item_id("iron_sword").unwrap_or(0), crate::items::item_id("apple").unwrap_or(0), crate::items::item_id("book").unwrap_or(0)];
+    for i in 0..7 {
+        let selected = i == game.creative_tab;
+        let name = if selected { format!("tab_top_sel_{}", i + 1) } else { format!("tab_top_{}", i + 1) };
+        let tx = x + i as f32 * 28.0;
+        let ty = y - if selected { 28.0 } else { 26.0 };
+        if g.atlas.sprites.contains_key(&name) { g.sprite(&name, tx, ty); }
+        g.block_icon(tab_icons[i], tx + 5.0, ty + if selected { 9.0 } else { 7.0 });
+        clicks.push(Click { x: tx, y: ty, w: 26.0, h: 28.0, action: Action::CreativeTab(i) });
+    }
     if g.atlas.sprites.contains_key("creative_bg") { g.sprite_part("creative_bg", x, y, 0.0, 0.0, 195.0, 136.0); }
-    if g.atlas.sprites.contains_key("tab_top_sel_1") { g.sprite("tab_top_sel_1", x, y - 28.0); }
-    g.text("Building Blocks", x + 8.0, y + 6.0, [0.25; 3], false);
-    let mut items = blocks::creative_items();
-    items.extend(crate::items::all_item_ids());
+    g.text(CREATIVE_TABS[game.creative_tab], x + 8.0, y + 6.0, [0.25; 3], false);
+    if game.creative_tab == 6 {
+        g.rect(x + 80.0, y + 4.0, 90.0, 12.0, [0.0, 0.0, 0.0, 1.0]);
+        g.rect(x + 81.0, y + 5.0, 88.0, 10.0, [0.55, 0.55, 0.55, 1.0]);
+        let caret = if (game.clock * 2.0) as i32 % 2 == 0 { "_" } else { "" };
+        g.text(&format!("{}{}", game.creative_search, caret), x + 83.0, y + 6.0, [1.0; 3], false);
+    }
+    let items = creative_list(game);
     let rows_total = items.len().div_ceil(9);
     let scroll = info.scroll.min(rows_total.saturating_sub(5));
     let mut hover_item: Option<u16> = None;

@@ -357,7 +357,7 @@ pub fn raycast(w: &World, origin: DVec3, dir: Vec3, reach: f64) -> Option<Hit> {
     let mut t = 0.0;
     while t <= reach {
         let id = w.get(cell[0], cell[1], cell[2]);
-        if id != AIR && def(id).solid { return Some(Hit { block: cell, normal }); }
+        if id != AIR && (def(id).solid || def(id).cross) { return Some(Hit { block: cell, normal }); }
         let a = if t_max[0] < t_max[1] && t_max[0] < t_max[2] { 0 } else if t_max[1] < t_max[2] { 1 } else { 2 };
         t = t_max[a];
         t_max[a] += inv[a];

@@ -41,9 +41,14 @@ const SPRITES: &[(&str, &str)] = &[
     ("slider_handle", "widget/slider_handle"), ("slider_handle_hl", "widget/slider_handle_highlighted"),
     ("text_field", "widget/text_field"), ("text_field_hl", "widget/text_field_highlighted"),
     ("scroller", "container/creative_inventory/scroller"),
-    ("tab_top_sel_1", "container/creative_inventory/tab_top_selected_1"),
-    ("tab_top_1", "container/creative_inventory/tab_top_unselected_1"),
-    ("tab_top_2", "container/creative_inventory/tab_top_unselected_2"),
+    ("tab_top_sel_1", "container/creative_inventory/tab_top_selected_1"), ("tab_top_sel_2", "container/creative_inventory/tab_top_selected_2"),
+    ("tab_top_sel_3", "container/creative_inventory/tab_top_selected_3"), ("tab_top_sel_4", "container/creative_inventory/tab_top_selected_4"),
+    ("tab_top_sel_5", "container/creative_inventory/tab_top_selected_5"), ("tab_top_sel_6", "container/creative_inventory/tab_top_selected_6"),
+    ("tab_top_sel_7", "container/creative_inventory/tab_top_selected_7"),
+    ("tab_top_1", "container/creative_inventory/tab_top_unselected_1"), ("tab_top_2", "container/creative_inventory/tab_top_unselected_2"),
+    ("tab_top_3", "container/creative_inventory/tab_top_unselected_3"), ("tab_top_4", "container/creative_inventory/tab_top_unselected_4"),
+    ("tab_top_5", "container/creative_inventory/tab_top_unselected_5"), ("tab_top_6", "container/creative_inventory/tab_top_unselected_6"),
+    ("tab_top_7", "container/creative_inventory/tab_top_unselected_7"),
     ("tab_bottom_sel_4", "container/creative_inventory/tab_bottom_selected_4"),
     ("tab_bottom_4", "container/creative_inventory/tab_bottom_unselected_4"),
 ];
@@ -74,7 +79,7 @@ impl Shelf {
 
 pub fn build_gui_atlas(a: &mut Assets, atlas: &Atlas, grass: [f32; 3]) -> GuiAtlas {
     let mut image = RgbaImage::new(ATLAS_SIZE, ATLAS_SIZE);
-    image::imageops::replace(&mut image, &atlas.image, 0, 0);
+    let _ = atlas;
     let mut sprites = HashMap::new();
     // 1x1 white pixel for solid rectangles.
     image.put_pixel(256, 0, Rgba([255, 255, 255, 255]));

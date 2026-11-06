@@ -34,6 +34,14 @@ pub static ITEMS: &[ItemDef] = &[
     it("bone", Kind::Misc, 0, 64, 0), it("string", Kind::Misc, 0, 64, 0), it("feather", Kind::Misc, 0, 64, 0),
     it("gunpowder", Kind::Misc, 0, 64, 0), it("leather", Kind::Misc, 0, 64, 0), it("stick", Kind::Misc, 0, 64, 0),
     it("coal", Kind::Misc, 0, 64, 0), it("iron_ingot", Kind::Misc, 0, 64, 0), it("diamond", Kind::Misc, 0, 64, 0),
+    it("emerald", Kind::Misc, 0, 64, 0), it("lapis_lazuli", Kind::Misc, 0, 64, 0), it("redstone", Kind::Misc, 0, 64, 0),
+    it("gold_ingot", Kind::Misc, 0, 64, 0), it("copper_ingot", Kind::Misc, 0, 64, 0), it("flint", Kind::Misc, 0, 64, 0),
+    it("wheat", Kind::Misc, 0, 64, 0), it("wheat_seeds", Kind::Misc, 0, 64, 0), it("carrot", Kind::Food(3), 0, 64, 0),
+    it("potato", Kind::Food(1), 0, 64, 0), it("baked_potato", Kind::Food(5), 0, 64, 0), it("golden_apple", Kind::Food(4), 0, 64, 0),
+    it("cooked_chicken", Kind::Food(6), 0, 64, 0), it("cooked_mutton", Kind::Food(6), 0, 64, 0), it("melon_slice", Kind::Food(2), 0, 64, 0),
+    it("cookie", Kind::Food(2), 0, 64, 0), it("pumpkin_pie", Kind::Food(8), 0, 64, 0), it("egg", Kind::Misc, 0, 16, 0),
+    it("slime_ball", Kind::Misc, 0, 64, 0), it("spider_eye", Kind::Food(2), 0, 64, 0), it("sugar", Kind::Misc, 0, 64, 0),
+    it("paper", Kind::Misc, 0, 64, 0), it("book", Kind::Misc, 0, 64, 0), it("clay_ball", Kind::Misc, 0, 64, 0), it("brick", Kind::Misc, 0, 64, 0),
 ];
 
 pub fn is_block(id: u16) -> bool { id < ITEM_BASE }
@@ -68,17 +76,9 @@ pub fn weapon_stats(id: u16) -> (f32, f32) {
 
 /// Which tool kind digs this block quickly, and the minimum pickaxe level to harvest it (None = no requirement).
 pub fn block_tool(name: &str) -> (Option<Kind>, Option<u8>) {
-    match name {
-        "stone" | "cobblestone" | "deepslate" | "tuff" | "granite" | "basalt" | "blackstone" | "end_stone" | "bricks" | "coal_ore"
-        | "sandstone" | "red_sandstone" | "calcite" | "packed_ice" | "ice" | "magma_block" | "copper_ore" | "raw_copper_block" => (Some(Kind::Pickaxe), if name == "ice" { None } else { Some(0) }),
-        "iron_ore" | "deepslate_iron_ore" | "raw_iron_block" => (Some(Kind::Pickaxe), Some(1)),
-        "gold_ore" | "diamond_ore" | "redstone_ore" => (Some(Kind::Pickaxe), Some(2)),
-        n if n.ends_with("terracotta") => (Some(Kind::Pickaxe), Some(0)),
-        "oak_log" | "oak_planks" => (Some(Kind::Axe), None),
-        "dirt" | "grass_block" | "sand" | "red_sand" | "gravel" | "clay" | "snow_block" | "mycelium" | "podzol" | "coarse_dirt" | "mud" | "rooted_dirt" | "powder_snow" => (Some(Kind::Shovel), None),
-        "oak_leaves" | "moss_block" | "warped_wart_block" => (Some(Kind::Hoe), None),
-        _ => (None, None),
-    }
+    let Some(d) = blocks::by_name(name) else { return (None, None) };
+    let kind = match d.tool { 1 => Some(Kind::Pickaxe), 2 => Some(Kind::Axe), 3 => Some(Kind::Shovel), 4 => Some(Kind::Hoe), _ => None };
+    (kind, if d.level >= 0 { Some(d.level as u8) } else { None })
 }
 
 /// Destroy progress added per tick (`BlockState.getDestroyProgress`), and whether the drop is allowed.
@@ -97,7 +97,7 @@ pub fn destroy_progress(held: Option<u16>, name: &str) -> (f32, bool) {
         level_ok = have >= need as i32;
     }
     // Pickaxe-only blocks (stone family) require a pickaxe to drop anything.
-    let needs_tool = matches!(tool, Some(Kind::Pickaxe)) && level.is_some();
+    let needs_tool = level.is_some();
     let can_harvest = !needs_tool || level_ok;
     let divisor = if can_harvest { 30.0 } else { 100.0 };
     (speed / hard.max(0.001) / divisor, can_harvest)
@@ -109,7 +109,13 @@ pub fn drop_for(name: &str) -> Option<u16> {
         "stone" => blocks::BLOCKS.iter().position(|b| b.name == "cobblestone").map(|i| i as u16),
         "coal_ore" => item_id("coal"),
         "diamond_ore" => item_id("diamond"),
-        "oak_leaves" | "glass" | "ice" | "water" | "lava" | "bedrock" | "powder_snow" | "air" => None,
+        "water" | "lava" | "bedrock" | "powder_snow" | "air" | "ice" => None,
+        n if n.ends_with("_leaves") || n.contains("glass") || n == "fire" => None,
+        "emerald_ore" | "deepslate_emerald_ore" => item_id("emerald"),
+        "lapis_ore" | "deepslate_lapis_ore" => item_id("lapis_lazuli"),
+        "deepslate_coal_ore" => item_id("coal"),
+        "deepslate_diamond_ore" => item_id("diamond"),
+        "short_grass" | "fern" => item_id("wheat_seeds"),
         n => BLOCKS.iter().position(|b| b.name == n).map(|i| i as u16),
     }
 }

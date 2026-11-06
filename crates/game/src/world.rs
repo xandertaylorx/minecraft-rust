@@ -15,7 +15,8 @@ pub fn idx(x: usize, y: usize, z: usize) -> usize { (y * 16 + z) * 16 + x }
 
 pub fn generate(wgen: &worldgen::chunk::OverworldGen, map: &[u16], cx: i32, cz: i32) -> (Blocks, Arc<Vec<u16>>) {
     let g = wgen.generate(cx, cz);
-    let blocks: Vec<u16> = g.blocks.iter().map(|&i| map[i as usize]).collect();
+    let mut blocks: Vec<u16> = g.blocks.iter().map(|&i| map[i as usize]).collect();
+    crate::features::decorate(&mut blocks, &g.column_biome, &wgen.biomes.biomes, cx, cz);
     (Arc::new(blocks), Arc::new(g.column_biome))
 }
 
