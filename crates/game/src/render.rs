@@ -62,9 +62,17 @@ pub struct Camera {
     pub yaw: f32,
     pub pitch: f32,
     pub fov_deg: f32,
+    pub roll: f32,
 }
 
 impl Camera {
+    pub fn up(&self) -> Vec3 {
+        if self.roll == 0.0 { return Vec3::Y; }
+        let f = self.forward();
+        let right = f.cross(Vec3::Y).normalize_or_zero();
+        let (s, c) = self.roll.to_radians().sin_cos();
+        (Vec3::Y * c + right * s).normalize()
+    }
     pub fn forward(&self) -> Vec3 {
         let (sy, cy) = self.yaw.to_radians().sin_cos();
         let (sp, cp) = self.pitch.to_radians().sin_cos();
@@ -743,7 +751,7 @@ impl Renderer {
     ) {
         let aspect = self.size.0 as f32 / self.size.1 as f32;
         let proj = Mat4::perspective_rh(cam.fov_deg.to_radians(), aspect, 0.05, 4000.0);
-        let view = Mat4::look_to_rh(Vec3::ZERO, cam.forward(), Vec3::Y);
+        let view = Mat4::look_to_rh(Vec3::ZERO, cam.forward(), cam.up());
         let vp = proj * view;
         // Sun shadow map: an orthographic projection along the sun direction, snapped to the texel grid.
         let s3 = Vec3::from(sky.sun_dir);

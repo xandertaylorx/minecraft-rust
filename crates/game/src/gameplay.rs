@@ -110,6 +110,7 @@ impl Game {
         self.health -= amount;
         if let Some(src) = from {
             let (dx, dz) = (src.x - self.player.pos.x, src.z - self.player.pos.z);
+            self.hurt_dir = ((dz.atan2(dx).to_degrees() as f32 - 90.0 - self.player.yaw).to_radians()).rem_euclid(std::f32::consts::TAU);
             let len = (dx * dx + dz * dz).sqrt().max(1e-5);
             let s = 0.4 + knockback as f64 * 0.5;
             self.player.vel.x = self.player.vel.x / 2.0 - dx / len * s;
@@ -606,6 +607,7 @@ impl Game {
                 Event::HurtPlayer { amount, from, knockback, by } => self.hurt_player(amount, Some(from), knockback, by),
                 Event::Arrow { pos, vel, owner } => self.shoot_arrow(pos, vel, false, false, owner),
                 Event::Explode { pos, power } => self.explode(pos, power),
+                Event::SetBlock { x, y, z, id } => { if self.world.set(x, y, z, id) { self.mark_dirty_pub(x, z); } }
             }
         }
         self.tick_arrows();

@@ -86,6 +86,7 @@ pub struct Game {
     pub particles: crate::particles::Particles,
     pub creative_tab: usize,
     pub difficulty: u8,
+    pub hurt_dir: f32,
     pub rules: HashMap<String, String>,
     pub tab_cycle: Option<(String, usize)>,
     pub chat_scroll: usize,
@@ -137,10 +138,10 @@ impl Game {
             wgen, pal_map, names, colors, settings: Settings::default(), screen: Screen::Title, prev_screen: Screen::Title,
             in_world: false, spawned: false, spawn: DVec3::new(8.5, 100.0, 8.5), world: World::default(),
             player: Player::new(DVec3::new(8.5, 200.0, 8.5)), keys: Keys::default(), mode: Mode::Creative, slots, cursor: None,
-            selected: 0, health: 20.0, hunger: 20.0, time_ticks: 1000.0, target: None, mining: None, swing_ticks: -1, prev_swing: 0.0,
+            selected: 0, health: 20.0, hunger: 20.0, time_ticks: 11000.0, target: None, mining: None, swing_ticks: -1, prev_swing: 0.0,
             break_cooldown: 0, place_cooldown: 0, tick_acc: 0.0, partial: 0.0, left_down: false, right_down: false, chat: Vec::new(), chat_input: String::new(),
             chat_history: Vec::new(), show_debug: false, hide_hud: false, item_name_timer: 0.0, 
-            last_w: -10.0, last_space: -10.0, clock: 0.0, debug_light: (0, 0), debug_ents: 0, target_mob: None, debug_timer: 0.0, ents: Default::default(), particles: Default::default(), creative_tab: 0, difficulty: 2, rules: HashMap::new(), tab_cycle: None, chat_scroll: 0, creative_search: String::new(), hand_item: 0, hand_height: 1.0, hand_prev_height: 1.0, x_bob: 0.0, y_bob: 0.0, prev_x_bob: 0.0, prev_y_bob: 0.0, populated: HashSet::new(), fires: HashMap::new(), attack_ticker: 100, use_ticks: 0, left_clicked: false, player_invuln: 0, player_hurt: 0, player_burning: 0, spawn_timer: 0, rng: worldgen::random::Xoro::new(0xC0FFEE),
+            last_w: -10.0, last_space: -10.0, clock: 0.0, debug_light: (0, 0), debug_ents: 0, target_mob: None, debug_timer: 0.0, ents: Default::default(), particles: Default::default(), creative_tab: 0, difficulty: 2, hurt_dir: 0.0, rules: HashMap::new(), tab_cycle: None, chat_scroll: 0, creative_search: String::new(), hand_item: 0, hand_height: 1.0, hand_prev_height: 1.0, x_bob: 0.0, y_bob: 0.0, prev_x_bob: 0.0, prev_y_bob: 0.0, populated: HashSet::new(), fires: HashMap::new(), attack_ticker: 100, use_ticks: 0, left_clicked: false, player_invuln: 0, player_hurt: 0, player_burning: 0, spawn_timer: 0, rng: worldgen::random::Xoro::new(0xC0FFEE),
             gen_tx, gen_rx, mesh_tx, mesh_rx, gen_inflight: HashSet::new(), mesh_inflight: HashSet::new(), meshed: HashMap::new(),
             dirty: HashSet::new(), version: 0,
         }
@@ -513,7 +514,15 @@ impl Game {
             pos.y += (-(t.cos().abs() * bob)) as f64;
             pitch += (t - 0.2).cos().abs() * bob * 5.0;
         }
-        Camera { pos, yaw, pitch, fov_deg: fov }
+        // GameRenderer.bobHurt: tilt away from the source of damage.
+        let mut roll = 0.0;
+        if self.player_hurt > 0 {
+            let f = ((self.player_hurt as f32 - self.partial) / 10.0).clamp(0.0, 1.0);
+            let k = (f.powi(4) * std::f32::consts::PI).sin() * 14.0;
+            roll = k * self.hurt_dir.sin();
+            pitch -= k * 0.5 * self.hurt_dir.cos();
+        }
+        Camera { pos, yaw, pitch, fov_deg: fov, roll }
     }
 
     pub fn sky(&self) -> (SkyState, f32) {

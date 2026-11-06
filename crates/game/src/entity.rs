@@ -52,6 +52,7 @@ pub enum Event {
     Arrow { pos: DVec3, vel: DVec3, owner: u64 },
     HurtPlayer { amount: f32, from: DVec3, knockback: f32, by: &'static str },
     Explode { pos: DVec3, power: f32 },
+    SetBlock { x: i32, y: i32, z: i32, id: u16 },
 }
 
 pub struct Ctx<'a> {
@@ -237,6 +238,7 @@ pub struct Mob {
     pub panic_ticks: i32,
     pub sun_check: i32,
     pub persistent: bool,
+    pub eat_timer: i32,
 }
 
 impl Mob {
@@ -248,7 +250,7 @@ impl Mob {
             last_hurt: 0.0, death_time: 0, burning: 0, walk_pos: 0.0, walk_speed: 0.0, speed: st.speed, target: false, aggressive: false, swell: 0,
             old_swell: 0, swell_dir: -1, swing: -1, age: 0, no_action_time: 0, bow_use: 0, jump: false, nav: Nav::default(),
             move_ctl: MoveCtl::default(), look_at: None, zza: 0.0, xxa: 0.0, goals: GoalSelector::default(), target_goals: GoalSelector::default(),
-            rng: Xoro::new(seed), hurt_by: false, panic_ticks: 0, sun_check: 0, persistent: false,
+            rng: Xoro::new(seed), hurt_by: false, panic_ticks: 0, sun_check: 0, persistent: false, eat_timer: 0,
         };
         m.yaw = (m.rng.next_float() * 360.0) - 180.0;
         m.prev_yaw = m.yaw;
@@ -399,6 +401,7 @@ impl Mob {
         self.tick_nav(ctx.world);
         self.tick_move_control();
         self.tick_look();
+        if self.eat_timer > 0 { let f = (self.eat_timer as f32 / 40.0 * std::f32::consts::PI).sin(); self.pitch = rot_lerp(self.pitch, 62.0 * f.sqrt(), 14.0); }
         self.no_action_time += 1;
         self.physics(ctx.world, false);
         // Walk animation (LivingEntity.calculateEntityAnimation).

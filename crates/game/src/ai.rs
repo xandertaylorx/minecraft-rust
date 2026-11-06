@@ -248,6 +248,31 @@ impl Goal for HurtByTarget {
     fn stop(&mut self, m: &mut Mob, _c: &mut Ctx) { m.target = false; }
 }
 
+/// EatBlockGoal (sheep): graze grass for 40 ticks, turning grass blocks into dirt.
+pub struct EatGrass { ticks: i32 }
+impl EatGrass { pub fn new() -> Self { Self { ticks: 0 } } }
+impl Goal for EatGrass {
+    fn flags(&self) -> u8 { F_MOVE | F_LOOK | F_JUMP }
+    fn can_use(&mut self, m: &mut Mob, c: &mut Ctx) -> bool {
+        if m.rng.next_int_bound(1000) != 0 { return false; }
+        let (x, y, z) = (m.pos.x.floor() as i32, m.pos.y.floor() as i32, m.pos.z.floor() as i32);
+        c.world.get(x, y - 1, z) == crate::blocks::id_of("grass_block") || c.world.get(x, y, z) == crate::blocks::id_of("short_grass")
+    }
+    fn can_continue(&mut self, _m: &mut Mob, _c: &mut Ctx) -> bool { self.ticks > 0 }
+    fn start(&mut self, m: &mut Mob, _c: &mut Ctx) { self.ticks = 40; m.eat_timer = 40; m.nav.stop(); }
+    fn stop(&mut self, m: &mut Mob, _c: &mut Ctx) { m.eat_timer = 0; }
+    fn tick(&mut self, m: &mut Mob, c: &mut Ctx) {
+        self.ticks -= 1;
+        m.eat_timer = self.ticks;
+        m.nav.stop();
+        if self.ticks == 4 {
+            let (x, y, z) = (m.pos.x.floor() as i32, m.pos.y.floor() as i32, m.pos.z.floor() as i32);
+            if c.world.get(x, y, z) == crate::blocks::id_of("short_grass") { c.events.push(Event::SetBlock { x, y, z, id: 0 }); }
+            else if c.world.get(x, y - 1, z) == crate::blocks::id_of("grass_block") { c.events.push(Event::SetBlock { x, y: y - 1, z, id: crate::blocks::id_of("dirt") }); }
+        }
+    }
+}
+
 /// FleeSunGoal: when burning in daylight, run to a nearby shaded spot.
 pub struct FleeSun { speed: f64, wanted: DVec3 }
 impl FleeSun { pub fn new(speed: f64) -> Self { Self { speed, wanted: DVec3::ZERO } } }
@@ -311,6 +336,7 @@ pub fn setup_goals(m: &mut Mob) {
             let panic = match m.kind { Kind::Cow => 2.0, Kind::Chicken => 1.4, _ => 1.25 };
             m.goals.add(0, Box::new(Float));
             m.goals.add(1, Box::new(Panic::new(panic)));
+            if m.kind == Kind::Sheep { m.goals.add(5, Box::new(EatGrass::new())); }
             m.goals.add(6, Box::new(Stroll::new(1.0)));
             m.goals.add(7, Box::new(LookAtPlayer::new(6.0)));
             m.goals.add(8, Box::new(RandomLookAround::new()));
