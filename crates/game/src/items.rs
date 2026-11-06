@@ -116,6 +116,7 @@ pub fn drop_for(name: &str) -> Option<u16> {
         "deepslate_coal_ore" => item_id("coal"),
         "deepslate_diamond_ore" => item_id("diamond"),
         "short_grass" | "fern" => item_id("wheat_seeds"),
+        n if n.contains("_wall_") => item_id(n.split("_wall_").next().unwrap()).or_else(|| BLOCKS.iter().position(|b| b.name == n.split("_wall_").next().unwrap()).map(|i| i as u16)),
         n => BLOCKS.iter().position(|b| b.name == n).map(|i| i as u16),
     }
 }

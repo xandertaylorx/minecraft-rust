@@ -610,6 +610,30 @@ impl Game {
                 Event::SetBlock { x, y, z, id } => { if self.world.set(x, y, z, id) { self.mark_dirty_pub(x, z); } }
             }
         }
+        // Ambient light-source particles (Block.animateTick): sample random nearby positions.
+        {
+            let p = self.player.pos;
+            let mut r = std::mem::replace(&mut self.rng, worldgen::random::Xoro::new(0));
+            for _ in 0..120 {
+                let (x, y, z) = (p.x.floor() as i32 + r.next_int_bound(25) - 12, p.y.floor() as i32 + r.next_int_bound(17) - 8, p.z.floor() as i32 + r.next_int_bound(25) - 12);
+                let d = def(self.world.get(x, y, z));
+                if d.model != 0 {
+                    // Flame sits at the tip of the (possibly tilted) torch.
+                    let (ox, oy, oz) = match d.model { 1 => (0.5, 0.7, 0.5), 2 => (0.5, 0.92, 0.72), 3 => (0.5, 0.92, 0.28), 4 => (0.72, 0.92, 0.5), _ => (0.28, 0.92, 0.5) };
+                    let tip = DVec3::new(x as f64 + ox, y as f64 + oy, z as f64 + oz);
+                    self.particles.smoke(&mut r, tip, DVec3::ZERO);
+                    self.particles.flame(&mut r, tip, DVec3::ZERO);
+                } else if d.name == "fire" && r.next_int_bound(4) == 0 {
+                    let (a, b, c) = (r.next_double(), r.next_double(), r.next_double());
+                    let tip = DVec3::new(x as f64 + 0.2 + 0.6 * a, y as f64 + 0.3 + 0.5 * b, z as f64 + 0.2 + 0.6 * c);
+                    self.particles.smoke(&mut r, tip, DVec3::new(0.0, 0.03, 0.0));
+                    if r.next_int_bound(3) == 0 { self.particles.flame(&mut r, tip, DVec3::new(0.0, 0.02, 0.0)); }
+                } else if d.name == "lava" && r.next_int_bound(100) == 0 && self.world.get(x, y + 1, z) == 0 {
+                    { let (a, b) = (r.next_double(), r.next_double()); self.particles.smoke(&mut r, DVec3::new(x as f64 + a, y as f64 + 1.0, z as f64 + b), DVec3::new(0.0, 0.02, 0.0)); }
+                }
+            }
+            self.rng = r;
+        }
         self.tick_arrows();
         self.tick_fires();
         self.tick_tnts();

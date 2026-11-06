@@ -125,6 +125,8 @@ struct SkyUniform {
     cloud_color: [f32; 4],
     cam: [f32; 4],
     p: [f32; 4],
+    light_vp: [[f32; 4]; 4],
+    misc: [f32; 4],
 }
 
 pub struct Renderer {
@@ -161,6 +163,12 @@ pub struct Renderer {
     entity_mesh: Option<(wgpu::Buffer, wgpu::Buffer, u32)>,
     crack_pipe: wgpu::RenderPipeline,
     shadow_pipe: wgpu::RenderPipeline,
+    shaft_gen_pipe: wgpu::RenderPipeline,
+    shaft_comp_pipe: wgpu::RenderPipeline,
+    shaft_view: wgpu::TextureView,
+    shaft_bg: wgpu::BindGroup,
+    shaft_layout: wgpu::BindGroupLayout,
+    lin_sampler: wgpu::Sampler,
     shadow_view: wgpu::TextureView,
     shadow_buf: wgpu::Buffer,
     shadow_bg: wgpu::BindGroup,
@@ -171,6 +179,8 @@ pub struct Renderer {
     pub gamma: f32,
     /// (start, end) fog distances overriding the render-distance fog (underwater).
     pub fog_override: Option<(f32, f32)>,
+    /// 0..1 ground-mist density (forests, swamps, valleys).
+    pub mist: f32,
 }
 
 fn make_texture_handle(device: &wgpu::Device, queue: &wgpu::Queue, img: &RgbaImage, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
@@ -272,6 +282,20 @@ fn msaa_view(device: &wgpu::Device, format: wgpu::TextureFormat, w: u32, h: u32)
         mip_level_count: 1, sample_count: SAMPLES, dimension: wgpu::TextureDimension::D2, format,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT, view_formats: &[],
     }).create_view(&Default::default())
+}
+
+fn make_shaft_target(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, samp: &wgpu::Sampler, w: u32, h: u32) -> (wgpu::TextureView, wgpu::BindGroup) {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("shafts"), size: wgpu::Extent3d { width: (w / 4).max(1), height: (h / 4).max(1), depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
+    });
+    let view = tex.create_view(&Default::default());
+    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: None, layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) }, wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(samp) }],
+    });
+    (view, bg)
 }
 
 fn depth_view(device: &wgpu::Device, w: u32, h: u32) -> wgpu::TextureView {
@@ -590,6 +614,11 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry { binding: 2, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering), count: None },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false }, count: None,
+                },
+                wgpu::BindGroupLayoutEntry { binding: 4, visibility: wgpu::ShaderStages::FRAGMENT, ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None },
             ],
         });
         let sky_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -598,6 +627,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: sky_buf.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&hud_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&shadow_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&shadow_samp) },
             ],
         });
         let sky_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("sky"), source: wgpu::ShaderSource::Wgsl(include_str!("sky.wgsl").into()) });
@@ -661,17 +692,45 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
             ],
         });
+        // Quarter-resolution light-shaft buffer, generated from the shadow map and composited additively.
+        let shaft_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[tex_entry(0), samp_entry(1)] });
+        let lin_sampler = device.create_sampler(&wgpu::SamplerDescriptor { mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear, address_mode_u: wgpu::AddressMode::ClampToEdge, address_mode_v: wgpu::AddressMode::ClampToEdge, ..Default::default() });
+        let (shaft_view, shaft_bg) = make_shaft_target(&device, &shaft_layout, &lin_sampler, size.0, size.1);
+        let shaft_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("shafts"), source: wgpu::ShaderSource::Wgsl(include_str!("shafts.wgsl").into()) });
+        let shaft_gen_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&sky_layout, &shaft_layout], push_constant_ranges: &[] });
+        let shaft_only_sky = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&sky_layout], push_constant_ranges: &[] });
+        let shaft_gen_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shaft gen"), layout: Some(&shaft_only_sky),
+            vertex: wgpu::VertexState { module: &shaft_shader, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
+            fragment: Some(wgpu::FragmentState { module: &shaft_shader, entry_point: Some("fs_gen"), compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format: wgpu::TextureFormat::Rgba8Unorm, blend: None, write_mask: wgpu::ColorWrites::ALL })] }),
+            primitive: Default::default(), depth_stencil: None, multisample: Default::default(), multiview: None, cache: None,
+        });
+        let additive = wgpu::BlendState {
+            color: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::One, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+            alpha: wgpu::BlendComponent { src_factor: wgpu::BlendFactor::Zero, dst_factor: wgpu::BlendFactor::One, operation: wgpu::BlendOperation::Add },
+        };
+        let shaft_comp_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shaft comp"), layout: Some(&shaft_gen_layout),
+            vertex: wgpu::VertexState { module: &shaft_shader, entry_point: Some("vs_full"), compilation_options: Default::default(), buffers: &[] },
+            fragment: Some(wgpu::FragmentState { module: &shaft_shader, entry_point: Some("fs_comp"), compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState { format, blend: Some(additive), write_mask: wgpu::ColorWrites::ALL })] }),
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState { format: DEPTH, depth_write_enabled: false, depth_compare: wgpu::CompareFunction::Always, stencil: Default::default(), bias: Default::default() }),
+            multisample: msaa_state(), multiview: None, cache: None,
+        });
         let depth = depth_view(&device, size.0, size.1);
         let msaa = msaa_view(&device, format, size.0, size.1);
         Self {
             device, queue, format, size, depth, msaa, globals, globals_bg, chunk_buf, chunk_bg,
-            opaque_pipe, trans_pipe, line_pipe, hud_pipe, hud_invert_pipe, hud_bg, hud_bg_linear, entity_bg, hand_globals, hand_bg, hand_pipe, hand_mesh: None, atlas_tex, ent_tex, entity_mesh: None, sky_buf, sky_bg, sky_pipe, cloud_pipe, cloud_vb, sky_rects, crack_pipe, shadow_pipe, shadow_view, shadow_buf, shadow_bg,
+            opaque_pipe, trans_pipe, line_pipe, hud_pipe, hud_invert_pipe, hud_bg, hud_bg_linear, entity_bg, hand_globals, hand_bg, hand_pipe, hand_mesh: None, atlas_tex, ent_tex, entity_mesh: None, sky_buf, sky_bg, sky_pipe, cloud_pipe, cloud_vb, sky_rects, crack_pipe, shadow_pipe, shaft_gen_pipe, shaft_comp_pipe, shaft_view, shaft_bg, shaft_layout, lin_sampler, shadow_view, shadow_buf, shadow_bg,
             chunks: HashMap::new(),
             sky: [0.47, 0.65, 1.0],
             day: 1.0,
             fog_end: 160.0,
             gamma: 0.5,
             fog_override: None,
+            mist: 0.2,
         }
     }
 
@@ -679,6 +738,9 @@ impl Renderer {
         self.size = (w.max(1), h.max(1));
         self.depth = depth_view(&self.device, self.size.0, self.size.1);
         self.msaa = msaa_view(&self.device, self.format, self.size.0, self.size.1);
+        let (v, b) = make_shaft_target(&self.device, &self.shaft_layout, &self.lin_sampler, self.size.0, self.size.1);
+        self.shaft_view = v;
+        self.shaft_bg = b;
     }
 
     pub fn set_chunk(&mut self, key: (i32, i32), data: MeshData) {
@@ -799,7 +861,7 @@ impl Renderer {
             sun: [sky.sun_dir[0], sky.sun_dir[1], sky.sun_dir[2], sky.cloud_scroll / 1.2],
             ldir: [sd.x, sd.y, sd.z, sun_str],
             cam: [cam.pos.x as f32, cam.pos.y as f32, cam.pos.z as f32, underwater],
-            zenith: [sky.zenith[0], sky.zenith[1], sky.zenith[2], 1.0],
+            zenith: [sky.zenith[0], sky.zenith[1], sky.zenith[2], self.mist],
         }));
         let hand_proj = Mat4::perspective_rh(cam.fov_deg.to_radians(), aspect, 0.05, 100.0);
         self.queue.write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&Globals {
@@ -818,6 +880,8 @@ impl Renderer {
             cloud_color: [sky.cloud_color[0], sky.cloud_color[1], sky.cloud_color[2], 1.0],
             cam: [cam.pos.x as f32, cam.pos.y as f32, cam.pos.z as f32, sky.cloud_scroll],
             p: [sky.cloud_height, self.fog_end * 0.55, self.fog_end, sky.time_angle],
+            light_vp,
+            misc: [sun_str, self.mist, 0.0, 0.0],
         };
         self.queue.write_buffer(&self.sky_buf, 0, bytemuck::bytes_of(&su));
 
@@ -931,6 +995,16 @@ impl Renderer {
                 timestamp_writes: None, occlusion_query_set: None,
             });
         }
+        if sun_str > 0.0 && !skip.contains('v') {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shafts"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment { view: &self.shaft_view, resolve_target: None, ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store } })],
+                depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.shaft_gen_pipe);
+            pass.set_bind_group(0, &self.sky_bg, &[]);
+            pass.draw(0..3, 0..1);
+        }
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("world"),
@@ -988,6 +1062,12 @@ impl Renderer {
                 pass.set_bind_group(1, &self.chunk_bg, &[(crack_slot as u64 * ALIGN) as u32]);
                 pass.set_vertex_buffer(0, vb.slice(..));
                 pass.draw(0..*n, 0..1);
+            }
+            if sun_str > 0.0 && !skip.contains('v') {
+                pass.set_pipeline(&self.shaft_comp_pipe);
+                pass.set_bind_group(0, &self.sky_bg, &[]);
+                pass.set_bind_group(1, &self.shaft_bg, &[]);
+                pass.draw(0..3, 0..1);
             }
             if let Some((vb, ib, n)) = &self.hand_mesh {
                 pass.set_pipeline(&self.hand_pipe);

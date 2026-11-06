@@ -95,6 +95,12 @@ pub fn mesh_chunk(region: &Region, light: &Light, tiles: &Tiles) -> MeshData {
                     let h = (rx.wrapping_mul(73856093) ^ y.wrapping_mul(19349663) ^ rz.wrapping_mul(83492791)) & 1;
                     let tile = (tiles.lookup)(if h == 0 { "fire_0" } else { "fire_1" });
                     emit_fire(&mut out.opaque, light, rx, y, rz, tile);
+                    emit_halo(&mut out.translucent, (rx - 16) as f32 + 0.5, y as f32 + 0.6, (rz - 16) as f32 + 0.5, 1.8);
+                    continue;
+                }
+                if d.model != 0 {
+                    let tile = (tiles.lookup)(d.top);
+                    emit_torch(&mut out, light, rx, y, rz, tile, d.model);
                     continue;
                 }
                 if d.cross {
@@ -200,6 +206,69 @@ fn emit_cross(target: &mut (Vec<Vertex>, Vec<u32>), light: &Light, rx: i32, y: i
         let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         for k in 0..4 {
             target.0.push(Vertex { pos: [lx + corners[k][0], ly + corners[k][1], lz + corners[k][2]], uv: tile_uv(tile, uvs[k]), color: [tint[0], tint[1], tint[2], 1.0], light: [s as f32, b as f32] });
+        }
+        target.1.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+}
+
+/// Vanilla `template_torch` / `template_torch_wall`: a 2x10x2 box, tilted 22.5 degrees and pushed against the wall.
+fn emit_torch(out: &mut MeshData, light: &Light, rx: i32, y: i32, rz: i32, tile: u32, model: u8) {
+    let (s, b) = light.at(rx, y, rz);
+    let (lx, lz) = ((rx - 16) as f32, (rz - 16) as f32);
+    let ly = y as f32;
+    // Box corners in 1/16 units, in the "facing +x" frame for wall torches.
+    let (x0, x1, y0, y1, z0, z1) = if model == 1 { (7.0f32, 9.0, 0.0, 10.0, 7.0, 9.0) } else { (-1.0, 1.0, 3.5, 13.5, 7.0, 9.0) };
+    let xf = |p: [f32; 3]| -> [f32; 3] {
+        if model == 1 { return p; }
+        // Tilt about z through (0, 3.5, 8) by -22.5 degrees, then rotate about the block centre to the facing.
+        let (sn, cs) = ((-22.5f32).to_radians().sin(), (-22.5f32).to_radians().cos());
+        let (dx, dy) = (p[0], p[1] - 3.5);
+        let (nx, ny) = (dx * cs - dy * sn, dx * sn + dy * cs + 3.5);
+        let (cx, cz) = (nx - 8.0, p[2] - 8.0);
+        // Default model leans toward +x (east); rotate for the others.
+        let (rx2, rz2) = match model { 5 => (cx, cz), 3 => (-cz, cx), 4 => (-cx, -cz), _ => (cz, -cx) };
+        [rx2 + 8.0, ny, rz2 + 8.0]
+    };
+    let c = |x: f32, yy: f32, z: f32| xf([x, yy, z]);
+    // (corners, uv rect in px: u0, v0, u1, v1, shade)
+    let faces: [([[f32; 3]; 4], [f32; 4], f32); 6] = [
+        ([c(x0, y1, z0), c(x1, y1, z0), c(x1, y1, z1), c(x0, y1, z1)], [7.0, 6.0, 9.0, 8.0], 1.0),
+        ([c(x0, y0, z0), c(x1, y0, z0), c(x1, y0, z1), c(x0, y0, z1)], [7.0, 13.0, 9.0, 15.0], 0.5),
+        ([c(x0, y1, z0), c(x1, y1, z0), c(x1, y0, z0), c(x0, y0, z0)], [7.0, 6.0, 9.0, 16.0], 0.8),
+        ([c(x1, y1, z1), c(x0, y1, z1), c(x0, y0, z1), c(x1, y0, z1)], [7.0, 6.0, 9.0, 16.0], 0.8),
+        ([c(x0, y1, z1), c(x0, y1, z0), c(x0, y0, z0), c(x0, y0, z1)], [7.0, 6.0, 9.0, 16.0], 0.6),
+        ([c(x1, y1, z0), c(x1, y1, z1), c(x1, y0, z1), c(x1, y0, z0)], [7.0, 6.0, 9.0, 16.0], 0.6),
+    ];
+    let target = &mut out.opaque;
+    let bl = (b as f32).max(13.0);
+    for (corners, uv, shade) in faces {
+        let base = target.0.len() as u32;
+        let uvs = [[uv[0], uv[1]], [uv[2], uv[1]], [uv[2], uv[3]], [uv[0], uv[3]]];
+        for k in 0..4 {
+            target.0.push(Vertex {
+                pos: [lx + corners[k][0] / 16.0, ly + corners[k][1] / 16.0, lz + corners[k][2] / 16.0],
+                uv: tile_uv(tile, [uvs[k][0] / 16.0, uvs[k][1] / 16.0]), color: [shade, shade, shade, 1.0], light: [s as f32, bl],
+            });
+        }
+        target.1.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    // Soft flame halo (blended pass; the shader recognises alpha 0.33 and draws a radial glow).
+    let top = xf([0.0 + if model == 1 { 8.0 } else { 0.0 }, if model == 1 { 11.0 } else { 14.0 }, 8.0]);
+    emit_halo(&mut out.translucent, lx + top[0] / 16.0, ly + top[1] / 16.0, lz + top[2] / 16.0, 1.3);
+}
+
+/// Three crossed quads with a radial falloff, used for light sources.
+pub fn emit_halo(target: &mut (Vec<Vertex>, Vec<u32>), cx: f32, cy: f32, cz: f32, r: f32) {
+    let quads: [[[f32; 3]; 4]; 3] = [
+        [[-r, r, 0.0], [r, r, 0.0], [r, -r, 0.0], [-r, -r, 0.0]],
+        [[0.0, r, -r], [0.0, r, r], [0.0, -r, r], [0.0, -r, -r]],
+        [[-r, 0.0, -r], [r, 0.0, -r], [r, 0.0, r], [-r, 0.0, r]],
+    ];
+    let uvs = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+    for q in quads {
+        let base = target.0.len() as u32;
+        for k in 0..4 {
+            target.0.push(Vertex { pos: [cx + q[k][0], cy + q[k][1], cz + q[k][2]], uv: uvs[k], color: [1.0, 0.62, 0.25, 0.33], light: [15.0, 15.0] });
         }
         target.1.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     }

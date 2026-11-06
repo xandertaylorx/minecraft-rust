@@ -29,19 +29,21 @@ pub struct BlockDef {
     pub flammable: bool,
     /// Creative tab: 0 building, 1 natural, 2 colored, 3 functional.
     pub category: u8,
+    /// Custom shape: 1 floor torch, 2..=5 wall torch facing -z, +z, -x, +x.
+    pub model: u8,
 }
 
 const fn cube(name: &'static str, tex: &'static str) -> BlockDef {
-    BlockDef { name, top: tex, side: tex, bottom: tex, overlay: None, tint: Tint::None, opaque: true, translucent: false, solid: true, emit: 0, cross: false, cull_same: false, hardness: 1.0, tool: 0, level: -1, flammable: false, category: 0 }
+    BlockDef { name, top: tex, side: tex, bottom: tex, overlay: None, tint: Tint::None, opaque: true, translucent: false, solid: true, emit: 0, cross: false, cull_same: false, hardness: 1.0, tool: 0, level: -1, flammable: false, category: 0, model: 0 }
 }
 const fn cols(name: &'static str, top: &'static str, side: &'static str, bottom: &'static str) -> BlockDef {
-    BlockDef { name, top, side, bottom, overlay: None, tint: Tint::None, opaque: true, translucent: false, solid: true, emit: 0, cross: false, cull_same: false, hardness: 1.0, tool: 0, level: -1, flammable: false, category: 0 }
+    BlockDef { name, top, side, bottom, overlay: None, tint: Tint::None, opaque: true, translucent: false, solid: true, emit: 0, cross: false, cull_same: false, hardness: 1.0, tool: 0, level: -1, flammable: false, category: 0, model: 0 }
 }
 
 pub const AIR: u16 = 0;
 
 static BASE: &[BlockDef] = &[
-    BlockDef { name: "air", top: "", side: "", bottom: "", overlay: None, tint: Tint::None, opaque: false, translucent: false, solid: false, emit: 0, cross: false, cull_same: false, hardness: 1.0, tool: 0, level: -1, flammable: false, category: 0 },
+    BlockDef { name: "air", top: "", side: "", bottom: "", overlay: None, tint: Tint::None, opaque: false, translucent: false, solid: false, emit: 0, cross: false, cull_same: false, hardness: 1.0, tool: 0, level: -1, flammable: false, category: 0, model: 0 },
     cube("stone", "stone"),
     cols("basalt", "basalt_top", "basalt_side", "basalt_top"),
     cube("tuff", "tuff"),
@@ -130,7 +132,7 @@ pub fn display_name(name: &str) -> String {
 
 /// Blocks that can appear in the creative inventory.
 pub fn creative_items() -> Vec<u16> {
-    (1..BLOCKS.len() as u16).filter(|&i| !matches!(BLOCKS[i as usize].name, "water" | "lava" | "bedrock" | "powder_snow" | "fire")).collect()
+    (1..BLOCKS.len() as u16).filter(|&i| !matches!(BLOCKS[i as usize].name, "water" | "lava" | "bedrock" | "powder_snow" | "fire") && !(BLOCKS[i as usize].model > 1)).collect()
 }
 
 use std::collections::HashSet;
@@ -211,6 +213,7 @@ fn classify(n: &str) -> (f32, u8, i8) {
 }
 
 fn category(n: &str, cross: bool) -> u8 {
+    if n == "torch" || n == "soul_torch" { return 3; }
     if matches!(n, "tnt" | "crafting_table" | "furnace" | "bookshelf" | "glowstone" | "sea_lantern" | "sponge" | "wet_sponge" | "note_block" | "jukebox" | "target" | "shroomlight" | "hay_block" | "slime_block" | "honey_block" | "pumpkin" | "melon" | "bone_block") { return 3; }
     if n.ends_with("_wool") || n.ends_with("concrete") || n.ends_with("concrete_powder") || n.ends_with("terracotta") || n.contains("stained_glass") { return 2; }
     if cross || n.ends_with("_leaves") || n.ends_with("_log") || n.ends_with("_wood") || n.ends_with("_ore") || n.ends_with("_stem")
@@ -310,11 +313,20 @@ fn build_blocks() -> Vec<BlockDef> {
             push!(d);
         }
     }
+    // Torches: floor and four wall orientations (the world stores only a block id, so orientation is part of the id).
+    for (base, light) in [("torch", 14u8), ("soul_torch", 10u8)] {
+        if !has(base) { continue; }
+        for (suffix, model) in [("", 1u8), ("_wall_n", 2), ("_wall_s", 3), ("_wall_w", 4), ("_wall_e", 5)] {
+            let mut d = cube(leak(format!("{base}{suffix}")), leak(base.to_string()));
+            d.solid = false; d.opaque = false; d.emit = light; d.model = model;
+            push!(d);
+        }
+    }
     // Post-process: physical properties, culling and creative tab.
     for d in v.iter_mut() {
         let (h, tool, lvl) = classify(d.name);
         if d.name != "air" && d.name != "water" && d.name != "lava" { d.hardness = h; d.tool = tool; d.level = lvl; }
-        if d.cross { d.hardness = 0.0; d.tool = 0; d.level = -1; }
+        if d.cross || d.model != 0 { d.hardness = 0.0; d.tool = 0; d.level = -1; }
         d.cull_same = d.translucent || d.name.ends_with("_leaves") || d.name.contains("glass") || d.name == "ice" || d.name == "water" || d.name == "slime_block";
         d.flammable = d.name.ends_with("_planks") || d.name.ends_with("_log") || d.name.ends_with("_wood") || d.name.ends_with("_leaves")
             || d.name.ends_with("_wool") || matches!(d.name, "hay_block" | "bookshelf");

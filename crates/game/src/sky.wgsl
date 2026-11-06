@@ -10,10 +10,14 @@ struct Sky {
     cloud_color: vec4<f32>,
     cam: vec4<f32>,       // camera position xyz, cloud scroll (blocks) in w
     p: vec4<f32>,         // x cloud height, y fog start, z fog end, w time angle (radians)
+    light_vp: mat4x4<f32>,
+    misc: vec4<f32>,      // x sun strength, y mist
 }
 @group(0) @binding(0) var<uniform> sky: Sky;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var samp: sampler;
+@group(0) @binding(3) var shadow_map: texture_depth_2d;
+@group(0) @binding(4) var shadow_samp: sampler_comparison;
 
 struct SOut { @builtin(position) clip: vec4<f32>, @location(0) ndc: vec2<f32> }
 
@@ -32,6 +36,25 @@ fn grade(c0: vec3<f32>) -> vec3<f32> {
     let a = x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14);
     return clamp(mix(x, a, 0.5) * vec3<f32>(1.03, 1.0, 0.95), vec3<f32>(0.0), vec3<f32>(1.0));
 }
+
+fn ign(p: vec2<f32>) -> f32 { return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715)))); }
+
+fn shafts(dir: vec3<f32>, dist: f32, px: vec2<f32>, mist: f32) -> f32 {
+    let maxd = min(dist, 52.0);
+    let j = ign(px);
+    var lit = 0.0;
+    for (var k = 0; k < 10; k++) {
+        let t = (f32(k) + j) / 10.0 * maxd;
+        let lp = sky.light_vp * vec4<f32>(dir * t, 1.0);
+        let uv = vec2<f32>(lp.x * 0.5 + 0.5, 0.5 - lp.y * 0.5);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || lp.z > 1.0) { lit += 1.0; }
+        else { lit += textureSampleCompareLevel(shadow_map, shadow_samp, uv, lp.z - 0.002); }
+    }
+    let sigma = 0.01 + 0.02 * mist;
+    return lit / 10.0 * (1.0 - exp(-maxd * sigma));
+}
+
+fn hg(c: f32) -> f32 { let gg = 0.62; return (1.0 - gg * gg) / pow(1.0 + gg * gg - 2.0 * gg * c, 1.5); }
 
 fn hash31(p: vec3<f32>) -> f32 {
     var q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));

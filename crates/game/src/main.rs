@@ -256,6 +256,15 @@ fn screenshot_mode(args: &[String]) {
         for x in -2..20 { for z in -4..30 { for y in 101..112 { game.world.set(x, y, z, 0); } game.world.set(x, 100, z, grass); } }
         game.player.pos = DVec3::new(8.5, 101.0, 8.5);
     }
+    if args.iter().any(|a| a == "--torches") {
+        let stone = blocks::id_of("stone_bricks");
+        for x in 4..13 { for y in 101..105 { game.world.set(x, y, 14, stone); } }
+        for y in 101..104 { game.world.set(3, y, 10, stone); }
+        for (x, y, z, n) in [(5, 102, 13, "torch_wall_s"), (8, 102, 13, "torch_wall_s"), (11, 102, 13, "torch_wall_s"), (4, 102, 10, "torch_wall_e"), (2, 102, 10, "torch_wall_w"), (3, 102, 9, "torch_wall_n"), (3, 102, 11, "torch_wall_s"), (6, 101, 10, "torch"), (9, 101, 10, "soul_torch"), (3, 104, 10, "torch")] {
+            game.world.set(x, y, z, blocks::id_of(n));
+        }
+        game.world.set(10, 101, 11, blocks::id_of("fire"));
+    }
     if args.iter().any(|a| a == "--fire") {
         for (i, x) in [5, 7, 9, 11].iter().enumerate() { game.world.set(*x, 101, 12, blocks::id_of("fire")); game.world.set(*x, 100, 12, if i == 1 { blocks::id_of("oak_planks") } else { blocks::id_of("grass_block") }); }
         game.world.set(13, 101, 12, blocks::id_of("tnt"));
@@ -349,6 +358,8 @@ fn screenshot_mode(args: &[String]) {
     }
     if args.iter().any(|a| a == "--swing") { game.swing_ticks = 3; game.prev_swing = 0.5; }
     apply_underwater(&game, &mut sky, &mut r, day);
+    for _ in 0..800 { game.update_mist(); }
+    r.mist = val("--mist").and_then(|v| v.parse().ok()).unwrap_or(game.mist);
     if want_mobs {
         let p = game.player.pos;
         let fwd = game.player.look_dir();
@@ -693,6 +704,7 @@ impl ApplicationHandler for App {
                 let prof = std::env::var("MCR_PROFILE").is_ok();
                 let t0 = Instant::now();
                 s.game.tick(dt);
+                if s.game.in_world { s.game.update_mist(); s.renderer.mist = s.game.mist; }
                 let t_tick = t0.elapsed();
                 s.anim_acc += dt.min(0.25);
                 while s.anim_acc >= 0.05 {

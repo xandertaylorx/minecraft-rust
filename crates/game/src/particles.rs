@@ -101,6 +101,14 @@ impl Particles {
         });
     }
 
+    pub fn flame(&mut self, r: &mut Xoro, pos: DVec3, vel: DVec3) {
+        if self.list.len() > 3000 { return; }
+        self.list.push(Particle {
+            kind: PKind::Flame, pos, prev: pos, vel, age: 0, max_age: 6 + r.next_int_bound(6),
+            size: 0.1 + rnd(r) as f32 * 0.06, gravity: 0.0, friction: 0.96, on_ground: false, color: [1.0; 3], rect: [0.0; 4], tile_rgb: [1.0; 3],
+        });
+    }
+
     pub fn tick(&mut self, w: &World, r: &mut Xoro) {
         let mut spawn: Vec<(DVec3, f32)> = Vec::new();
         for e in self.emitters.iter_mut() {

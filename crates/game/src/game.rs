@@ -86,6 +86,7 @@ pub struct Game {
     pub particles: crate::particles::Particles,
     pub creative_tab: usize,
     pub difficulty: u8,
+    pub mist: f32,
     pub hurt_dir: f32,
     pub rules: HashMap<String, String>,
     pub tab_cycle: Option<(String, usize)>,
@@ -141,7 +142,7 @@ impl Game {
             selected: 0, health: 20.0, hunger: 20.0, time_ticks: 11000.0, target: None, mining: None, swing_ticks: -1, prev_swing: 0.0,
             break_cooldown: 0, place_cooldown: 0, tick_acc: 0.0, partial: 0.0, left_down: false, right_down: false, chat: Vec::new(), chat_input: String::new(),
             chat_history: Vec::new(), show_debug: false, hide_hud: false, item_name_timer: 0.0, 
-            last_w: -10.0, last_space: -10.0, clock: 0.0, debug_light: (0, 0), debug_ents: 0, target_mob: None, debug_timer: 0.0, ents: Default::default(), particles: Default::default(), creative_tab: 0, difficulty: 2, hurt_dir: 0.0, rules: HashMap::new(), tab_cycle: None, chat_scroll: 0, creative_search: String::new(), hand_item: 0, hand_height: 1.0, hand_prev_height: 1.0, x_bob: 0.0, y_bob: 0.0, prev_x_bob: 0.0, prev_y_bob: 0.0, populated: HashSet::new(), fires: HashMap::new(), attack_ticker: 100, use_ticks: 0, left_clicked: false, player_invuln: 0, player_hurt: 0, player_burning: 0, spawn_timer: 0, rng: worldgen::random::Xoro::new(0xC0FFEE),
+            last_w: -10.0, last_space: -10.0, clock: 0.0, debug_light: (0, 0), debug_ents: 0, target_mob: None, debug_timer: 0.0, ents: Default::default(), particles: Default::default(), creative_tab: 0, difficulty: 2, mist: 0.2, hurt_dir: 0.0, rules: HashMap::new(), tab_cycle: None, chat_scroll: 0, creative_search: String::new(), hand_item: 0, hand_height: 1.0, hand_prev_height: 1.0, x_bob: 0.0, y_bob: 0.0, prev_x_bob: 0.0, prev_y_bob: 0.0, populated: HashSet::new(), fires: HashMap::new(), attack_ticker: 100, use_ticks: 0, left_clicked: false, player_invuln: 0, player_hurt: 0, player_burning: 0, spawn_timer: 0, rng: worldgen::random::Xoro::new(0xC0FFEE),
             gen_tx, gen_rx, mesh_tx, mesh_rx, gen_inflight: HashSet::new(), mesh_inflight: HashSet::new(), meshed: HashMap::new(),
             dirty: HashSet::new(), version: 0,
         }
@@ -277,6 +278,19 @@ impl Game {
         false
     }
 
+    /// Pops torches that lost the block they were attached to.
+    pub fn check_torch_support(&mut self, p: [i32; 3]) {
+        for d in [[0, 1, 0], [1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] {
+            let q = [p[0] + d[0], p[1] + d[1], p[2] + d[2]];
+            let m = def(self.world.get(q[0], q[1], q[2])).model;
+            if m == 0 { continue; }
+            // Support offset: floor torch rests on the block below; wall torches on the block behind them.
+            let off = match m { 1 => [0, -1, 0], 2 => [0, 0, 1], 3 => [0, 0, -1], 4 => [1, 0, 0], _ => [-1, 0, 0] };
+            let s = [q[0] + off[0], q[1] + off[1], q[2] + off[2]];
+            if !def(self.world.get(s[0], s[1], s[2])).solid { self.break_block_at(q); }
+        }
+    }
+
     pub fn break_block_at(&mut self, p: [i32; 3]) {
         let id = self.world.get(p[0], p[1], p[2]);
         let name = def(id).name;
@@ -285,6 +299,7 @@ impl Game {
             self.mark_dirty(p[0], p[2]);
             self.break_particles(p, id);
             if name == "fire" { self.fires.remove(&(p[0], p[1], p[2])); }
+            self.check_torch_support(p);
             if self.mode == Mode::Survival {
                 let held = self.slots[self.selected].map(|s| s.id);
                 let (_, harvest) = crate::items::destroy_progress(held, name);
@@ -311,7 +326,15 @@ impl Game {
             && (x as f64) < p.x + crate::player::HALF_W && (x as f64 + 1.0) > p.x - crate::player::HALF_W
             && (z as f64) < p.z + crate::player::HALF_W && (z as f64 + 1.0) > p.z - crate::player::HALF_W
             && (y as f64) < p.y + crate::player::HEIGHT && (y as f64 + 1.0) > p.y;
-        if overlaps || !self.world.set(x, y, z, stack.id) { return; }
+        let mut place_id = stack.id;
+        if def(stack.id).model == 1 {
+            // Torches go on the top or sides of solid blocks; the side picks the wall variant.
+            if !def(self.world.get(h.block[0], h.block[1], h.block[2])).solid { return; }
+            let suffix = match h.normal { [0, 1, 0] => "", [0, 0, -1] => "_wall_n", [0, 0, 1] => "_wall_s", [-1, 0, 0] => "_wall_w", [1, 0, 0] => "_wall_e", _ => return };
+            let name = format!("{}{}", def(stack.id).name, suffix);
+            match crate::blocks::BLOCKS.iter().position(|b| b.name == name) { Some(i) => place_id = i as u16, None => return }
+        }
+        if overlaps || !self.world.set(x, y, z, place_id) { return; }
         self.mark_dirty(x, z);
         self.swing_ticks = 0;
         if self.mode == Mode::Survival {
@@ -490,6 +513,21 @@ impl Game {
     }
 
     // ------------------------------------------------------------ rendering state
+
+    /// Target ground-mist density for the biome the player stands in; eased every frame.
+    pub fn update_mist(&mut self) {
+        let p = self.player.pos;
+        let id = self.wgen.biome_at(p.x as i32, p.y as i32, p.z as i32) as usize;
+        let name = self.wgen.biomes.biomes.get(id).map(|b| b.name.as_str()).unwrap_or("plains");
+        let target = match name {
+            "dark_forest" | "swamp" | "mangrove_swamp" | "old_growth_pine_taiga" | "old_growth_spruce_taiga" | "bamboo_jungle" | "jungle" | "sparse_jungle" => 1.0,
+            "forest" | "birch_forest" | "old_growth_birch_forest" | "taiga" | "snowy_taiga" | "flower_forest" | "cherry_grove" | "meadow" | "grove" => 0.65,
+            "river" | "frozen_river" | "beach" | "stony_shore" | "lush_caves" | "windswept_forest" => 0.4,
+            "desert" | "badlands" | "eroded_badlands" | "wooded_badlands" => 0.0,
+            _ => 0.18,
+        };
+        self.mist += (target - self.mist) * 0.01;
+    }
 
     pub fn camera(&self, _alpha: f32) -> Camera {
         let a = self.partial as f64;

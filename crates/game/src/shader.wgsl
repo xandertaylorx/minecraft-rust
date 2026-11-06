@@ -99,6 +99,26 @@ fn wave_h(p: vec2<f32>, t: f32) -> f32 {
     return vnoise(p * 0.9 + vec2<f32>(t * 0.35, t * 0.2)) * 0.5 + vnoise(p * 2.1 - vec2<f32>(t * 0.5, -t * 0.3)) * 0.3 + vnoise(p * 4.7 + vec2<f32>(t * 0.9, t * 0.7)) * 0.2;
 }
 
+fn ign(p: vec2<f32>) -> f32 { return fract(52.9829189 * fract(dot(p, vec2<f32>(0.06711056, 0.00583715)))); }
+
+// Volumetric light shafts: march the view ray through the shadow map and accumulate sunlit in-scattering.
+fn shafts(dir: vec3<f32>, dist: f32, px: vec2<f32>, mist: f32) -> f32 {
+    let maxd = min(dist, 52.0);
+    let j = ign(px);
+    var lit = 0.0;
+    for (var k = 0; k < 10; k++) {
+        let t = (f32(k) + j) / 10.0 * maxd;
+        let lp = g.light_vp * vec4<f32>(dir * t, 1.0);
+        let uv = vec2<f32>(lp.x * 0.5 + 0.5, 0.5 - lp.y * 0.5);
+        if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || lp.z > 1.0) { lit += 1.0; }
+        else { lit += textureSampleCompareLevel(shadow_map, shadow_samp, uv, lp.z - 0.002); }
+    }
+    let sigma = 0.01 + 0.02 * mist;
+    return lit / 10.0 * (1.0 - exp(-maxd * sigma));
+}
+
+fn hg(c: f32) -> f32 { let gg = 0.62; return (1.0 - gg * gg) / pow(1.0 + gg * gg - 2.0 * gg * c, 1.5); }
+
 fn shadow_at(rel: vec3<f32>, n: vec3<f32>) -> f32 {
     let ndl0 = max(dot(n, g.ldir.xyz), 0.0);
     let p = rel + n * (0.12 + 0.08 * (1.0 - ndl0)) + g.ldir.xyz * 0.04;
@@ -117,13 +137,24 @@ fn shadow_at(rel: vec3<f32>, n: vec3<f32>) -> f32 {
 
 @fragment
 fn fs(i: VOut) -> @location(0) vec4<f32> {
+    if (abs(i.color.a - 0.33) < 0.006) {
+        // Light-source halo: soft radial glow, flickering, strongest at night and indoors.
+        let d = length(i.uv * 2.0 - 1.0);
+        let fall = pow(clamp(1.0 - d, 0.0, 1.0), 2.4);
+        let fl = 0.85 + 0.15 * vnoise(vec2<f32>(g.sun.w * 9.0, floor(i.rel.x + g.cam.x) * 1.7 + floor(i.rel.z + g.cam.z) * 2.3));
+        let a = fall * fl * mix(0.62, 0.2, g.params.x) * smoothstep(0.25, 1.6, i.dist);
+        let fogh = clamp((i.dist - g.params.y) / (g.params.z - g.params.y), 0.0, 1.0);
+        return vec4<f32>(mix(i.color.rgb * vec3<f32>(1.0, 0.95, 0.9), g.fog_color.rgb, fogh), a * (1.0 - fogh));
+    }
     let t = textureSample(atlas, samp, i.uv);
     if (t.a < 0.1) { discard; }
     let is_hand = g.params.y > 9000.0;
     let vdir = normalize(i.rel);
     var n = normalize(cross(dpdx(i.rel), dpdy(i.rel)));
     if (dot(n, vdir) > 0.0) { n = -n; }
-    let lm = lightmap(i.light.x, i.light.y);
+    let wpf = i.rel + g.cam.xyz;
+    let flick = 0.93 + 0.1 * vnoise(vec2<f32>(g.sun.w * 8.0, floor(wpf.x * 0.2) * 3.1 + floor(wpf.z * 0.2) * 5.7 + floor(wpf.y * 0.2)));
+    let lm = lightmap(i.light.x, min(i.light.y * flick, 15.0));
     let time = g.sun.w;
     let wp = i.rel + g.cam.xyz;
     let is_water = abs(i.color.a - 0.72) < 0.006;
@@ -190,6 +221,15 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
             }
         }
         rgb = albedo * light;
+    }
+    if (!is_hand) {
+        // Ground mist: thicker low down, in forests/swamps and when the sun is low.
+        let low_sun = 1.0 - smoothstep(0.0, 0.55, g.sun.y);
+        let dens = (0.0025 + 0.011 * g.zenith.w) * (1.0 + 1.2 * low_sun);
+        let hf = exp(-max(wp.y - 64.0, 0.0) * 0.05);
+        let fm = (1.0 - exp(-i.dist * dens * hf)) * (1.0 - g.cam.w);
+        let mcol = mix(g.fog_color.rgb, scol * 0.85 + vec3<f32>(0.1), 0.18 * g.ldir.w);
+        rgb = mix(rgb, mcol, fm * 0.65);
     }
     var fogc = g.fog_color.rgb;
     if (!is_hand) { fogc = mix(fogc, scol * 1.05, pow(max(dot(vdir, g.sun.xyz), 0.0), 5.0) * 0.4 * g.params.x * (1.0 - g.cam.w)); }
