@@ -26,6 +26,13 @@ fn vs_sky(@builtin(vertex_index) i: u32) -> SOut {
     return o;
 }
 
+fn grade(c0: vec3<f32>) -> vec3<f32> {
+    let l = dot(c0, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let x = mix(vec3<f32>(l), c0 * 1.1, 1.28);
+    let a = x * (2.51 * x + 0.03) / (x * (2.43 * x + 0.59) + 0.14);
+    return clamp(mix(x, a, 0.5) * vec3<f32>(1.03, 1.0, 0.95), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
 fn hash31(p: vec3<f32>) -> f32 {
     var q = fract(p * vec3<f32>(0.1031, 0.1030, 0.0973));
     q += dot(q, q.yxz + 33.33);
@@ -54,9 +61,9 @@ fn fs_sky(i: SOut) -> @location(0) vec4<f32> {
     var col = mix(sky.horizon.rgb, sky.zenith.rgb, smoothstep(0.0, 0.5, h));
     if (dir.y < 0.0) { col = sky.horizon.rgb; }
     // Sunrise / sunset glow around the horizon.
-    let glow = (1.0 - smoothstep(0.0, 0.45, abs(s.y))) * (1.0 - night * 0.0);
+    let glow = 1.0 - smoothstep(0.0, 0.6, abs(s.y));
     let toward = max(dot(normalize(vec3<f32>(dir.x, 0.0, dir.z) + vec3<f32>(1e-5, 0.0, 0.0)), normalize(vec3<f32>(s.x, 0.0, s.z) + vec3<f32>(1e-5, 0.0, 0.0))), 0.0);
-    col = mix(col, vec3<f32>(1.0, 0.45, 0.2) * 0.9, glow * toward * toward * exp(-abs(dir.y) * 5.0) * 0.85);
+    col = mix(col, vec3<f32>(1.0, 0.55, 0.22) * 0.95, glow * toward * toward * exp(-abs(dir.y) * 4.5) * 0.8);
     // Stars rotate with the sky.
     let c = cos(sky.p.w);
     let sn = sin(sky.p.w);
@@ -69,10 +76,18 @@ fn fs_sky(i: SOut) -> @location(0) vec4<f32> {
         let a = clamp((night - 0.35) * 1.6, 0.0, 1.0) * (0.55 + 0.45 * fract(r * 311.7));
         col = mix(col, vec3<f32>(1.0), a);
     }
+    // Sun: additive (the texture's black backdrop must not occlude the sky), plus a golden halo.
+    let low = 1.0 - smoothstep(0.0, 0.7, s.y);
+    let vlow = 1.0 - smoothstep(0.0, 0.25, s.y);
+    let scol = mix(mix(vec3<f32>(1.0, 0.95, 0.84), vec3<f32>(1.0, 0.72, 0.4), low), vec3<f32>(1.0, 0.45, 0.16), vlow);
+    let sd = max(dot(dir, s), 0.0);
     let sun = body(dir, s, 0.15, sky.r_sun);
-    col = mix(col, sun.rgb, sun.a);
+    col += sun.rgb * sun.a * 1.4;
+    col += scol * (pow(sd, 900.0) * 3.0 + pow(sd, 64.0) * 0.35 + pow(sd, 6.0) * 0.14 * (1.0 - night));
     let moon = body(dir, -s, 0.1, sky.r_moon);
-    col = mix(col, moon.rgb, moon.a);
+    col += moon.rgb * moon.a * 1.1;
+    col = mix(col, moon.rgb, moon.a * 0.5);
+    col = grade(col);
     return vec4<f32>(col, 1.0);
 }
 
@@ -104,5 +119,7 @@ fn fs_cloud(i: COut) -> @location(0) vec4<f32> {
     let fade = 1.0 - smoothstep(sky.p.y, sky.p.z * 1.6, dist);
     let a = 0.8 * fade;
     if (a <= 0.01) { discard; }
-    return vec4<f32>(sky.cloud_color.rgb, a);
+    let cs = sky.sun.xyz;
+    let warm = mix(vec3<f32>(1.0), vec3<f32>(1.0, 0.82, 0.62), (1.0 - smoothstep(0.0, 0.7, cs.y)) * (1.0 - sky.sun.w));
+    return vec4<f32>(grade(sky.cloud_color.rgb * warm), a);
 }

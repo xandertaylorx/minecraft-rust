@@ -124,10 +124,10 @@ pub fn mesh_chunk(region: &Region, light: &Light, tiles: &Tiles) -> MeshData {
                     };
                     let target = if d.translucent { &mut out.translucent } else { &mut out.opaque };
                     let wh = if d.name == "water" && region.block(rx, y + 1, rz) != id { 8.0 / 9.0 } else { 1.0 };
-                    emit(target, region, light, f, rx, y, rz, tile, tint, d.translucent, 0.0, wh);
+                    emit(target, region, light, f, rx, y, rz, tile, tint, d.translucent, 0.0, wh, if d.name == "water" { 0.72 } else { 0.75 });
                     if let (Some(ov), true) = (d.overlay, fi >= 2) {
                         let t = (tiles.lookup)(ov);
-                        emit(&mut out.opaque, region, light, f, rx, y, rz, t, grass[col], false, 0.001, 1.0);
+                        emit(&mut out.opaque, region, light, f, rx, y, rz, t, grass[col], false, 0.001, 1.0, 1.0);
                     }
                 }
             }
@@ -139,7 +139,7 @@ pub fn mesh_chunk(region: &Region, light: &Light, tiles: &Tiles) -> MeshData {
 #[allow(clippy::too_many_arguments)]
 fn emit(
     target: &mut (Vec<Vertex>, Vec<u32>), region: &Region, light: &Light, f: &Face,
-    rx: i32, y: i32, rz: i32, tile: u32, tint: [f32; 3], translucent: bool, push: f32, top: f32,
+    rx: i32, y: i32, rz: i32, tile: u32, tint: [f32; 3], translucent: bool, push: f32, top: f32, alpha: f32,
 ) {
     let base = target.0.len() as u32;
     let (fx, fy, fz) = (rx + f.n[0], y + f.n[1], rz + f.n[2]);
@@ -175,7 +175,7 @@ fn emit(
         target.0.push(Vertex {
             pos: [ax, ay, az],
             uv: tile_uv(tile, f.uvs[i]),
-            color: [tint[0] * s, tint[1] * s, tint[2] * s, if translucent { 0.75 } else { 1.0 }],
+            color: [tint[0] * s, tint[1] * s, tint[2] * s, if translucent { alpha } else { 1.0 }],
             light: [sky, blk],
         });
     }

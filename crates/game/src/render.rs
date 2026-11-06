@@ -23,7 +23,14 @@ struct Globals {
     view_proj: [[f32; 4]; 4],
     fog_color: [f32; 4],
     params: [f32; 4],
+    light_vp: [[f32; 4]; 4],
+    sun: [f32; 4],
+    ldir: [f32; 4],
+    cam: [f32; 4],
+    zenith: [f32; 4],
 }
+const SHADOW_SIZE: u32 = 2048;
+const SHADOW_EXTENT: f64 = 64.0;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -131,6 +138,10 @@ pub struct Renderer {
     ent_tex: wgpu::Texture,
     entity_mesh: Option<(wgpu::Buffer, wgpu::Buffer, u32)>,
     crack_pipe: wgpu::RenderPipeline,
+    shadow_pipe: wgpu::RenderPipeline,
+    shadow_view: wgpu::TextureView,
+    shadow_buf: wgpu::Buffer,
+    shadow_bg: wgpu::BindGroup,
     chunks: HashMap<(i32, i32), ChunkGpu>,
     pub sky: [f32; 3],
     pub day: f32,
@@ -310,7 +321,40 @@ impl Renderer {
                 },
                 tex_entry(1),
                 samp_entry(2),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture { sample_type: wgpu::TextureSampleType::Depth, view_dimension: wgpu::TextureViewDimension::D2, multisampled: false },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4, visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison), count: None,
+                },
             ],
+        });
+        let shadow_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0, visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None,
+                },
+                tex_entry(1),
+                samp_entry(2),
+            ],
+        });
+        let shadow_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("shadow"), size: wgpu::Extent3d { width: SHADOW_SIZE, height: SHADOW_SIZE, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2, format: DEPTH,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING, view_formats: &[],
+        });
+        let shadow_view = shadow_tex.create_view(&Default::default());
+        let shadow_samp = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,
+            compare: Some(wgpu::CompareFunction::LessEqual), ..Default::default()
+        });
+        let shadow_buf = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("shadow u"), size: 64, usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false,
         });
         let chunk_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -333,6 +377,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&shadow_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&shadow_samp) },
             ],
         });
         let chunk_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -349,6 +395,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: globals.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&ent_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&shadow_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&shadow_samp) },
             ],
         });
         let hand_globals = device.create_buffer(&wgpu::BufferDescriptor {
@@ -361,6 +409,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 0, resource: hand_globals.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&ent_view) },
                 wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&shadow_view) },
+                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&shadow_samp) },
             ],
         });
         let sampler_lin = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -566,11 +616,34 @@ impl Renderer {
             multisample: msaa_state(), multiview: None, cache: None,
         });
 
+        let shadow_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow"), source: wgpu::ShaderSource::Wgsl(include_str!("shadow.wgsl").into()),
+        });
+        let shadow_pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor { label: None, bind_group_layouts: &[&shadow_layout, &chunk_layout], push_constant_ranges: &[] });
+        let shadow_pipe = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("shadow"), layout: Some(&shadow_pl),
+            vertex: wgpu::VertexState { module: &shadow_shader, entry_point: Some("vs_shadow"), compilation_options: Default::default(), buffers: &[vbuf.clone()] },
+            fragment: Some(wgpu::FragmentState { module: &shadow_shader, entry_point: Some("fs_shadow"), compilation_options: Default::default(), targets: &[] }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::LessEqual, stencil: Default::default(),
+                bias: wgpu::DepthBiasState { constant: 2, slope_scale: 2.5, clamp: 0.0 },
+            }),
+            multisample: Default::default(), multiview: None, cache: None,
+        });
+        let shadow_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None, layout: &shadow_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: shadow_buf.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&atlas_view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
         let depth = depth_view(&device, size.0, size.1);
         let msaa = msaa_view(&device, format, size.0, size.1);
         Self {
             device, queue, format, size, depth, msaa, globals, globals_bg, chunk_buf, chunk_bg,
-            opaque_pipe, trans_pipe, line_pipe, hud_pipe, hud_invert_pipe, hud_bg, hud_bg_linear, entity_bg, hand_globals, hand_bg, hand_pipe, hand_mesh: None, atlas_tex, ent_tex, entity_mesh: None, sky_buf, sky_bg, sky_pipe, cloud_pipe, cloud_vb, sky_rects, crack_pipe,
+            opaque_pipe, trans_pipe, line_pipe, hud_pipe, hud_invert_pipe, hud_bg, hud_bg_linear, entity_bg, hand_globals, hand_bg, hand_pipe, hand_mesh: None, atlas_tex, ent_tex, entity_mesh: None, sky_buf, sky_bg, sky_pipe, cloud_pipe, cloud_vb, sky_rects, crack_pipe, shadow_pipe, shadow_view, shadow_buf, shadow_bg,
             chunks: HashMap::new(),
             sky: [0.47, 0.65, 1.0],
             day: 1.0,
@@ -672,16 +745,44 @@ impl Renderer {
         let proj = Mat4::perspective_rh(cam.fov_deg.to_radians(), aspect, 0.05, 4000.0);
         let view = Mat4::look_to_rh(Vec3::ZERO, cam.forward(), Vec3::Y);
         let vp = proj * view;
+        // Sun shadow map: an orthographic projection along the sun direction, snapped to the texel grid.
+        let s3 = Vec3::from(sky.sun_dir);
+        let sd = Vec3::new(s3.x, s3.y.max(0.16), s3.z).normalize();
+        let sun_str = ((s3.y - 0.02) / 0.23).clamp(0.0, 1.0);
+        let sun_str = sun_str * sun_str * (3.0 - 2.0 * sun_str);
+        let dirv = -sd;
+        let upv = if sd.y.abs() > 0.95 { Vec3::X } else { Vec3::Y };
+        let right = dirv.cross(upv).normalize();
+        let up2 = right.cross(dirv).normalize();
+        let fwd = cam.forward();
+        let hf = DVec3::new(fwd.x as f64, 0.0, fwd.z as f64).normalize_or_zero();
+        let center = cam.pos + hf * 28.0;
+        let texel = SHADOW_EXTENT * 2.0 / SHADOW_SIZE as f64;
+        let (rd, ud) = (DVec3::new(right.x as f64, right.y as f64, right.z as f64), DVec3::new(up2.x as f64, up2.y as f64, up2.z as f64));
+        let (a, b) = (center.dot(rd), center.dot(ud));
+        let center = center + rd * ((a / texel).round() * texel - a) + ud * ((b / texel).round() * texel - b);
+        let crel = (center - cam.pos).as_vec3();
+        let lview = Mat4::look_to_rh(crel + sd * 150.0, dirv, upv);
+        let lproj = Mat4::orthographic_rh(-SHADOW_EXTENT as f32, SHADOW_EXTENT as f32, -SHADOW_EXTENT as f32, SHADOW_EXTENT as f32, 0.1, 320.0);
+        let light_vp = (lproj * lview).to_cols_array_2d();
+        self.queue.write_buffer(&self.shadow_buf, 0, bytemuck::bytes_of(&light_vp));
+        let underwater = if self.fog_override.is_some() { 1.0 } else { 0.0 };
         self.queue.write_buffer(&self.globals, 0, bytemuck::bytes_of(&Globals {
             view_proj: vp.to_cols_array_2d(),
             fog_color: [sky.horizon[0], sky.horizon[1], sky.horizon[2], 1.0],
             params: [self.day, self.fog_override.map(|f| f.0).unwrap_or(self.fog_end * 0.55), self.fog_override.map(|f| f.1).unwrap_or(self.fog_end), self.gamma],
+            light_vp,
+            sun: [sky.sun_dir[0], sky.sun_dir[1], sky.sun_dir[2], sky.cloud_scroll / 1.2],
+            ldir: [sd.x, sd.y, sd.z, sun_str],
+            cam: [cam.pos.x as f32, cam.pos.y as f32, cam.pos.z as f32, underwater],
+            zenith: [sky.zenith[0], sky.zenith[1], sky.zenith[2], 1.0],
         }));
         let hand_proj = Mat4::perspective_rh(cam.fov_deg.to_radians(), aspect, 0.05, 100.0);
         self.queue.write_buffer(&self.hand_globals, 0, bytemuck::bytes_of(&Globals {
             view_proj: hand_proj.to_cols_array_2d(),
             fog_color: [0.0, 0.0, 0.0, 1.0],
             params: [self.day.max(0.55), 10000.0, 20000.0, self.gamma],
+            light_vp, sun: [0.0, 1.0, 0.0, 0.0], ldir: [0.0, 1.0, 0.0, 0.0], cam: [0.0; 4], zenith: [0.0; 4],
         }));
         let su = SkyUniform {
             inv_vp: vp.inverse().to_cols_array_2d(),
@@ -701,13 +802,18 @@ impl Renderer {
         keys.truncate(CHUNK_SLOTS as usize - 3);
         let cam_chunk = ((cam.pos.x / 16.0).floor() as i32, (cam.pos.z / 16.0).floor() as i32);
         keys.sort_by_key(|k| (k.0 - cam_chunk.0).pow(2) + (k.1 - cam_chunk.1).pow(2));
-        let mut data = vec![0u8; (keys.len() + 3) * ALIGN as usize];
+        let extra: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|k| !keys.contains(k) && (k.0 - cam_chunk.0).abs() <= 6 && (k.1 - cam_chunk.1).abs() <= 6).collect();
+        let mut data = vec![0u8; (keys.len() + 3 + extra.len()) * ALIGN as usize];
         let mut put = |slot: usize, o: [f32; 4]| {
             data[slot * ALIGN as usize..slot * ALIGN as usize + 16].copy_from_slice(bytemuck::bytes_of(&o));
         };
         for (i, k) in keys.iter().enumerate() {
             let rel = DVec3::new(k.0 as f64 * 16.0 - cam.pos.x, -cam.pos.y, k.1 as f64 * 16.0 - cam.pos.z);
             put(i, [rel.x as f32, rel.y as f32, rel.z as f32, 0.0]);
+        }
+        for (i, k) in extra.iter().enumerate() {
+            let rel = DVec3::new(k.0 as f64 * 16.0 - cam.pos.x, -cam.pos.y, k.1 as f64 * 16.0 - cam.pos.z);
+            put(keys.len() + 3 + i, [rel.x as f32, rel.y as f32, rel.z as f32, 0.0]);
         }
         let line_slot = keys.len();
         let crack_slot = keys.len() + 1;
@@ -748,6 +854,38 @@ impl Renderer {
         });
         let gui_bufs: Vec<(Kind, wgpu::Buffer, u32)> = gui.iter().filter(|b| !b.verts.is_empty()).map(|b| (b.kind, self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&b.verts), usage: wgpu::BufferUsages::VERTEX }), b.verts.len() as u32)).collect();
         let mut enc = self.device.create_command_encoder(&Default::default());
+        if sun_str > 0.0 {
+            let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow"), color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None, occlusion_query_set: None,
+            });
+            pass.set_pipeline(&self.shadow_pipe);
+            pass.set_bind_group(0, &self.shadow_bg, &[]);
+            let all = keys.iter().enumerate().map(|(i, k)| (i, *k)).chain(extra.iter().enumerate().map(|(i, k)| (keys.len() + 3 + i, *k)));
+            for (slot, k) in all {
+                let Some(m) = self.chunks[&k].opaque.as_ref() else { continue };
+                pass.set_bind_group(1, &self.chunk_bg, &[(slot as u64 * ALIGN) as u32]);
+                pass.set_vertex_buffer(0, m.vb.slice(..));
+                pass.set_index_buffer(m.ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..m.n, 0, 0..1);
+            }
+        } else {
+            // No sun: clear to "far" so every lookup reads as lit.
+            let _ = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("shadow clear"), color_attachments: &[],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.shadow_view,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None, occlusion_query_set: None,
+            });
+        }
         {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("world"),
