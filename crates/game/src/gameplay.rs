@@ -570,6 +570,26 @@ impl Game {
                 }
             }
         }
+        // Entity.push: overlapping living entities shove each other apart.
+        for i in 0..mobs.len() {
+            for j in (i + 1)..mobs.len() {
+                if !mobs[i].alive() || !mobs[j].alive() { continue; }
+                let (wi, wj) = (mobs[i].st().width, mobs[j].st().width);
+                let (mut dx, mut dz) = (mobs[j].pos.x - mobs[i].pos.x, mobs[j].pos.z - mobs[i].pos.z);
+                if (mobs[i].pos.y - mobs[j].pos.y).abs() > 1.0 { continue; }
+                let mut d = dx.abs().max(dz.abs());
+                if d < (wi + wj) / 2.0 && d >= 0.01 {
+                    d = d.sqrt();
+                    dx /= d; dz /= d;
+                    let mult = (1.0 / d).min(1.0);
+                    let (px, pz) = (dx * mult * 0.05, dz * mult * 0.05);
+                    mobs[i].vel.x -= px; mobs[i].vel.z -= pz;
+                    mobs[j].vel.x += px; mobs[j].vel.z += pz;
+                } else if d < 0.01 && d < (wi + wj) / 2.0 {
+                    mobs[j].vel.x += 0.02; mobs[i].vel.x -= 0.02;
+                }
+            }
+        }
         // Deaths: drop loot once, then remove after the 20 tick fall animation.
         let mut loot: Vec<(Kind, DVec3, bool)> = Vec::new();
         for m in mobs.iter_mut() {

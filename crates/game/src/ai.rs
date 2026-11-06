@@ -248,6 +248,33 @@ impl Goal for HurtByTarget {
     fn stop(&mut self, m: &mut Mob, _c: &mut Ctx) { m.target = false; }
 }
 
+/// FleeSunGoal: when burning in daylight, run to a nearby shaded spot.
+pub struct FleeSun { speed: f64, wanted: DVec3 }
+impl FleeSun { pub fn new(speed: f64) -> Self { Self { speed, wanted: DVec3::ZERO } } }
+fn sky_open(c: &Ctx, x: i32, y: i32, z: i32) -> bool { (0..40).all(|d| !def(c.world.get(x, y + d, z)).solid) }
+impl Goal for FleeSun {
+    fn flags(&self) -> u8 { F_MOVE }
+    fn can_use(&mut self, m: &mut Mob, c: &mut Ctx) -> bool {
+        if m.target || c.daylight < 0.7 { return false; }
+        let (x, y, z) = (m.pos.x.floor() as i32, (m.pos.y + 1.0).floor() as i32, m.pos.z.floor() as i32);
+        if !sky_open(c, x, y, z) { return false; }
+        for _ in 0..16 {
+            let (dx, dz) = (m.rng.next_int_bound(13) - 6, m.rng.next_int_bound(13) - 6);
+            let dy = m.rng.next_int_bound(5) - 2;
+            let (tx, ty, tz) = (x + dx, y + dy, z + dz);
+            if !c.world.loaded(tx, tz) { continue; }
+            if !sky_open(c, tx, ty, tz) && def(c.world.get(tx, ty - 2, tz)).solid && !def(c.world.get(tx, ty - 1, tz)).solid {
+                self.wanted = DVec3::new(tx as f64 + 0.5, (ty - 1) as f64, tz as f64 + 0.5);
+                return true;
+            }
+        }
+        false
+    }
+    fn can_continue(&mut self, m: &mut Mob, _c: &mut Ctx) -> bool { !m.nav.is_done() }
+    fn start(&mut self, m: &mut Mob, c: &mut Ctx) { m.move_to(c.world, self.wanted, self.speed); }
+    fn stop(&mut self, m: &mut Mob, _c: &mut Ctx) { m.nav.stop(); }
+}
+
 pub fn setup_goals(m: &mut Mob) {
     let _ = target_pos;
     match m.kind {
@@ -262,6 +289,7 @@ pub fn setup_goals(m: &mut Mob) {
         }
         Kind::Skeleton => {
             m.goals.add(1, Box::new(Float));
+            m.goals.add(3, Box::new(FleeSun::new(1.0)));
             m.goals.add(4, Box::new(BowAttack::new(1.0, 20, 15.0)));
             m.goals.add(5, Box::new(Stroll::new(1.0)));
             m.goals.add(6, Box::new(LookAtPlayer::new(8.0)));
