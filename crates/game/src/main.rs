@@ -611,14 +611,16 @@ impl ApplicationHandler for App {
         let size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT, format, width: size.width.max(1), height: size.height.max(1),
-            present_mode: wgpu::PresentMode::Fifo, alpha_mode: caps.alpha_modes[0], view_formats: vec![], desired_maximum_frame_latency: 2,
+            present_mode: wgpu::PresentMode::AutoNoVsync, alpha_mode: caps.alpha_modes[0], view_formats: vec![], desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
         let (atlas, gui_atlas, mut assets, ent_atlas) = setup_assets();
         let renderer = Renderer::new(device, queue, format, (config.width, config.height), &atlas, &gui_atlas, &ent_atlas.image);
         let (wgen, pal_map) = make_generator();
         let colors = Arc::new(biome_colors(&mut assets, &wgen));
-        let game = Game::new(wgen, pal_map, Arc::new(atlas.names.clone()), colors);
+        let mut game = Game::new(wgen, pal_map, Arc::new(atlas.names.clone()), colors);
+        let mut renderer = renderer;
+        if std::env::var("MCR_AUTOPLAY").is_ok() { game.start_world(&mut renderer); }
         self.state = Some(State {
             window, surface, config, renderer, game, atlas_names: atlas.names.clone(), ent_atlas, anims: load_anims(&mut assets, &atlas.names), anim_acc: 0.0, gui_atlas, adapter_name, grabbed: false,
             last: Instant::now(), frames: 0, fps: 0, fps_timer: Instant::now(), mouse: (0.0, 0.0), clicks: Vec::new(), dragging: None,
@@ -688,13 +690,18 @@ impl ApplicationHandler for App {
                 let now = Instant::now();
                 let dt = (now - s.last).as_secs_f64();
                 s.last = now;
+                let prof = std::env::var("MCR_PROFILE").is_ok();
+                let t0 = Instant::now();
                 s.game.tick(dt);
+                let t_tick = t0.elapsed();
                 s.anim_acc += dt.min(0.25);
                 while s.anim_acc >= 0.05 {
                     s.anim_acc -= 0.05;
                     for an in s.anims.iter_mut() { if an.step() { s.renderer.update_tile(an.tile, an.current()); } }
                 }
+                let t1 = Instant::now();
                 s.game.stream(&mut s.renderer, 24);
+                let t_stream = t1.elapsed();
                 let (mut sky, day) = s.game.sky();
                 s.renderer.day = day;
                 apply_underwater(&s.game, &mut sky, &mut s.renderer, day);
@@ -718,8 +725,14 @@ impl ApplicationHandler for App {
                         s.clicks = ui::draw(&s.game, &mut gui, &info);
                         let ws = if s.game.in_world { WorldState { target: s.game.target.as_ref().map(|h| h.block), crack: crack_tile(&s.game, &s.atlas_names) } } else { WorldState { target: None, crack: None } };
                         let sky = if s.game.in_world { sky } else { SkyState { cloud_color: [0.0; 3], ..sky } };
+                        let t2 = Instant::now();
                         s.renderer.render(&view, &cam, &ws, &sky, &gui.batches, &|k| (k.0 - pcx).abs() <= vd && (k.1 - pcz).abs() <= vd && s.game.in_world);
+                        let t_render = t2.elapsed();
+                        let t3 = Instant::now();
+                        if prof { s.renderer.device.poll(wgpu::Maintain::Wait); }
+                        let t_gpu = t3.elapsed();
                         frame.present();
+                        if prof && s.frames % 30 == 0 { println!("tick {:.2}ms stream {:.2}ms render(cpu) {:.2}ms gpu-wait {:.2}ms | fps {} chunks {} size {}x{}", t_tick.as_secs_f64() * 1e3, t_stream.as_secs_f64() * 1e3, t_render.as_secs_f64() * 1e3, t_gpu.as_secs_f64() * 1e3, s.fps, s.renderer.chunk_count(), s.config.width, s.config.height); }
                         if s.want_screenshot {
                             s.want_screenshot = false;
                             let img = s.renderer.screenshot(&cam, &ws, &sky, &gui.batches);

@@ -2,7 +2,7 @@
 use std::collections::HashMap;
 
 use bytemuck::{Pod, Zeroable};
-use glam::{DVec3, Mat4, Vec3};
+use glam::{DVec3, Mat4, Vec2, Vec3, Vec4};
 use image::RgbaImage;
 use wgpu::util::DeviceExt;
 
@@ -55,6 +55,20 @@ struct GpuMesh {
 struct ChunkGpu {
     opaque: Option<GpuMesh>,
     translucent: Option<GpuMesh>,
+    y0: f32,
+    y1: f32,
+}
+
+fn frustum_planes(vp: &Mat4) -> [Vec4; 6] {
+    let r = [vp.row(0), vp.row(1), vp.row(2), vp.row(3)];
+    [r[3] + r[0], r[3] - r[0], r[3] + r[1], r[3] - r[1], r[2], r[3] - r[2]]
+}
+fn aabb_in_frustum(planes: &[Vec4; 6], min: Vec3, max: Vec3) -> bool {
+    for p in planes {
+        let v = Vec3::new(if p.x >= 0.0 { max.x } else { min.x }, if p.y >= 0.0 { max.y } else { min.y }, if p.z >= 0.0 { max.z } else { min.z });
+        if p.x * v.x + p.y * v.y + p.z * v.z + p.w < 0.0 { return false; }
+    }
+    true
 }
 
 pub struct Camera {
@@ -680,7 +694,9 @@ impl Renderer {
                 n: i.len() as u32,
             })
         };
-        let g = ChunkGpu { opaque: up(data.opaque), translucent: up(data.translucent) };
+        let (mut y0, mut y1) = (f32::MAX, f32::MIN);
+        for v in data.opaque.0.iter().chain(data.translucent.0.iter()) { y0 = y0.min(v.pos[1]); y1 = y1.max(v.pos[1]); }
+        let g = ChunkGpu { opaque: up(data.opaque), translucent: up(data.translucent), y0: y0 - 1.0, y1: y1 + 1.0 };
         self.chunks.insert(key, g);
     }
 
@@ -806,11 +822,31 @@ impl Renderer {
         self.queue.write_buffer(&self.sky_buf, 0, bytemuck::bytes_of(&su));
 
         // Per-chunk camera-relative offsets (slot order = draw order).
-        let mut keys: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|k| visible(*k)).collect();
+        let planes = frustum_planes(&vp);
+        let cp = cam.pos;
+        let mut keys: Vec<(i32, i32)> = self.chunks.iter().filter(|(k, c)| {
+            if !visible(**k) { return false; }
+            let (rx, rz) = (k.0 as f32 * 16.0 - cp.x as f32, k.1 as f32 * 16.0 - cp.z as f32);
+            // Always keep the chunk the camera is in (near-plane precision), cull the rest by frustum.
+            if rx <= 0.0 && rx + 16.0 > 0.0 && rz <= 0.0 && rz + 16.0 > 0.0 { return true; }
+            aabb_in_frustum(&planes, Vec3::new(rx, c.y0 - cp.y as f32, rz), Vec3::new(rx + 16.0, c.y1 - cp.y as f32, rz + 16.0))
+        }).map(|(k, _)| *k).collect();
         keys.truncate(CHUNK_SLOTS as usize - 3);
         let cam_chunk = ((cam.pos.x / 16.0).floor() as i32, (cam.pos.z / 16.0).floor() as i32);
         keys.sort_by_key(|k| (k.0 - cam_chunk.0).pow(2) + (k.1 - cam_chunk.1).pow(2));
-        let extra: Vec<(i32, i32)> = self.chunks.keys().copied().filter(|k| !keys.contains(k) && (k.0 - cam_chunk.0).abs() <= 6 && (k.1 - cam_chunk.1).abs() <= 6).collect();
+        let keyset: std::collections::HashSet<(i32, i32)> = keys.iter().copied().collect();
+        let in_light = |k: &(i32, i32), c: &ChunkGpu| {
+            let (rx, rz) = (k.0 as f32 * 16.0 - cp.x as f32, k.1 as f32 * 16.0 - cp.z as f32);
+            let lv = Mat4::from_cols_array_2d(&light_vp);
+            let mut mn = Vec2::splat(f32::MAX);
+            let mut mx = Vec2::splat(f32::MIN);
+            for cx in [0.0, 16.0] { for cy in [c.y0, c.y1] { for cz in [0.0, 16.0] {
+                let q = lv * Vec4::new(rx + cx, cy - cp.y as f32, rz + cz, 1.0);
+                mn = mn.min(Vec2::new(q.x, q.y)); mx = mx.max(Vec2::new(q.x, q.y));
+            } } }
+            mx.x >= -1.0 && mn.x <= 1.0 && mx.y >= -1.0 && mn.y <= 1.0
+        };
+        let extra: Vec<(i32, i32)> = self.chunks.iter().filter(|(k, c)| !keyset.contains(*k) && (k.0 - cam_chunk.0).abs() <= 6 && (k.1 - cam_chunk.1).abs() <= 6 && in_light(k, c)).map(|(k, _)| *k).collect();
         let mut data = vec![0u8; (keys.len() + 3 + extra.len()) * ALIGN as usize];
         let mut put = |slot: usize, o: [f32; 4]| {
             data[slot * ALIGN as usize..slot * ALIGN as usize + 16].copy_from_slice(bytemuck::bytes_of(&o));
@@ -862,7 +898,8 @@ impl Renderer {
         });
         let gui_bufs: Vec<(Kind, wgpu::Buffer, u32)> = gui.iter().filter(|b| !b.verts.is_empty()).map(|b| (b.kind, self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: bytemuck::cast_slice(&b.verts), usage: wgpu::BufferUsages::VERTEX }), b.verts.len() as u32)).collect();
         let mut enc = self.device.create_command_encoder(&Default::default());
-        if sun_str > 0.0 {
+        let skip = std::env::var("MCR_SKIP").unwrap_or_default();
+        if sun_str > 0.0 && !skip.contains('s') {
             let mut pass = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("shadow"), color_attachments: &[],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
@@ -874,7 +911,7 @@ impl Renderer {
             });
             pass.set_pipeline(&self.shadow_pipe);
             pass.set_bind_group(0, &self.shadow_bg, &[]);
-            let all = keys.iter().enumerate().map(|(i, k)| (i, *k)).chain(extra.iter().enumerate().map(|(i, k)| (keys.len() + 3 + i, *k)));
+            let all = keys.iter().enumerate().filter(|(_, k)| in_light(k, &self.chunks[k])).map(|(i, k)| (i, *k)).chain(extra.iter().enumerate().map(|(i, k)| (keys.len() + 3 + i, *k)));
             for (slot, k) in all {
                 let Some(m) = self.chunks[&k].opaque.as_ref() else { continue };
                 pass.set_bind_group(1, &self.chunk_bg, &[(slot as u64 * ALIGN) as u32]);
@@ -914,7 +951,7 @@ impl Renderer {
 
             pass.set_bind_group(0, &self.globals_bg, &[]);
             pass.set_pipeline(&self.opaque_pipe);
-            for (i, k) in keys.iter().enumerate() {
+            for (i, k) in keys.iter().enumerate().filter(|_| !skip.contains('o')) {
                 let Some(m) = self.chunks[k].opaque.as_ref() else { continue };
                 pass.set_bind_group(1, &self.chunk_bg, &[(i as u64 * ALIGN) as u32]);
                 pass.set_vertex_buffer(0, m.vb.slice(..));
@@ -931,7 +968,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.globals_bg, &[]);
             }
             // Clouds sit behind translucent water but in front of the sky.
-            if sky.cloud_color[0] > 0.0 {
+            if sky.cloud_color[0] > 0.0 && !skip.contains('c') {
                 pass.set_pipeline(&self.cloud_pipe);
                 pass.set_bind_group(0, &self.sky_bg, &[]);
                 pass.set_vertex_buffer(0, self.cloud_vb.slice(..));
@@ -939,7 +976,7 @@ impl Renderer {
                 pass.set_bind_group(0, &self.globals_bg, &[]);
             }
             pass.set_pipeline(&self.trans_pipe);
-            for (i, k) in keys.iter().enumerate().rev() {
+            for (i, k) in keys.iter().enumerate().rev().filter(|_| !skip.contains('t')) {
                 let Some(m) = self.chunks[k].translucent.as_ref() else { continue };
                 pass.set_bind_group(1, &self.chunk_bg, &[(i as u64 * ALIGN) as u32]);
                 pass.set_vertex_buffer(0, m.vb.slice(..));

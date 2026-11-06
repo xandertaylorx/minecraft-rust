@@ -164,7 +164,7 @@ impl Game {
         self.screen = Screen::Playing;
         self.health = 20.0;
         self.hunger = 20.0;
-        self.time_ticks = 1000.0;
+        self.time_ticks = 11000.0;
         self.player.flying = self.mode == Mode::Creative;
         self.say("§eWelcome to Minecraft (Rust)! Press T to chat, / for commands.");
     }

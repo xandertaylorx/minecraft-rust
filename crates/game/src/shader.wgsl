@@ -106,13 +106,11 @@ fn shadow_at(rel: vec3<f32>, n: vec3<f32>) -> f32 {
     let uv = vec2<f32>(lp.x * 0.5 + 0.5, 0.5 - lp.y * 0.5);
     if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || lp.z > 1.0) { return 1.0; }
     let texel = 1.0 / 2048.0;
-    var s = 0.0;
-    for (var x = -1; x <= 1; x++) {
-        for (var y = -1; y <= 1; y++) {
-            s += textureSampleCompare(shadow_map, shadow_samp, uv + vec2<f32>(f32(x), f32(y)) * texel * 1.2, lp.z - 0.0012);
-        }
-    }
-    s = s / 9.0;
+    let o = texel * 0.75;
+    let s = (textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(-o, -o), lp.z - 0.0012)
+           + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(o, -o), lp.z - 0.0012)
+           + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(-o, o), lp.z - 0.0012)
+           + textureSampleCompareLevel(shadow_map, shadow_samp, uv + vec2<f32>(o, o), lp.z - 0.0012)) * 0.25;
     let edge = max(abs(uv.x - 0.5), abs(uv.y - 0.5)) * 2.0;
     return mix(s, 1.0, smoothstep(0.82, 1.0, edge));
 }
@@ -177,7 +175,8 @@ fn fs(i: VOut) -> @location(0) vec4<f32> {
         var light = lm;
         if (!is_hand) {
             let ndl = max(dot(n, g.ldir.xyz), 0.0);
-            let sh = shadow_at(i.rel, n);
+            var sh = 1.0;
+            if (sunlight * sun_str * ndl > 0.01) { sh = shadow_at(i.rel, n); }
             let direct = sunlight * sun_str * ndl * sh;
             let amt = sunlight * sun_str;
             let cool = mix(vec3<f32>(1.0), vec3<f32>(0.80, 0.89, 1.08), amt);
