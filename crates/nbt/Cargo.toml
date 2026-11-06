@@ -1,0 +1,7 @@
+[package]
+name = "nbt"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+flate2 = "1"

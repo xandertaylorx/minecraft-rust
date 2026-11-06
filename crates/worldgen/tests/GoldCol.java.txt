@@ -1,0 +1,27 @@
+import net.minecraft.world.level.levelgen.*;
+import net.minecraft.world.level.*;
+import net.minecraft.world.level.biome.*;
+import net.minecraft.core.*;
+import net.minecraft.core.registries.Registries;
+public class GoldCol {
+  public static void main(String[] a) throws Exception {
+    net.minecraft.SharedConstants.tryDetectVersion(); net.minecraft.server.Bootstrap.bootStrap();
+    HolderLookup.Provider lookup = net.minecraft.data.registries.VanillaRegistries.createLookup();
+    var settings = lookup.lookupOrThrow(Registries.NOISE_SETTINGS).getOrThrow(NoiseGeneratorSettings.OVERWORLD);
+    var plains = lookup.lookupOrThrow(Registries.BIOME).getOrThrow(Biomes.PLAINS);
+    var gen = new NoiseBasedChunkGenerator(new FixedBiomeSource(plains), settings);
+    RandomState rs = RandomState.create(settings.value(), lookup.lookupOrThrow(Registries.NOISE), 12345L);
+    var acc = LevelHeightAccessor.create(-64, 384);
+    int[][] pts = {{0,0},{37,-91},{-500,320},{1234,-777},{16,16},{15,15},{-1,-1},{250,5000},{-3000,-3000},{64,64},{200,-40},{-120,900}};
+    for (int[] q : pts) {
+      var col = gen.getBaseColumn(q[0], q[1], acc, rs);
+      StringBuilder sb = new StringBuilder("@ " + q[0] + " " + q[1] + " ");
+      for (int y = -64; y < 320; y++) {
+        var b = col.getBlock(y);
+        char c = b.isAir() ? 'A' : b.is(net.minecraft.world.level.block.Blocks.WATER) ? 'W' : b.is(net.minecraft.world.level.block.Blocks.LAVA) ? 'L' : 'S';
+        sb.append(c);
+      }
+      System.out.println(sb);
+    }
+  }
+}

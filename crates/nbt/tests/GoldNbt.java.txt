@@ -1,0 +1,14 @@
+import net.minecraft.nbt.*;
+import java.nio.file.*;
+public class GoldNbt {
+  public static void main(String[] a) throws Exception {
+    CompoundTag t = new CompoundTag();
+    t.putByte("b", (byte)-3); t.putShort("s", (short)1234); t.putInt("i", -99999); t.putLong("l", Long.MIN_VALUE + 5);
+    t.putFloat("f", 1.5f); t.putDouble("d", -0.25); t.putString("str", "nul\0 and 😀 and é");
+    t.putByteArray("ba", new byte[]{1,-2,3}); t.putIntArray("ia", new int[]{7,8,9}); t.putLongArray("la", new long[]{1L<<40, -1});
+    ListTag list = new ListTag(); list.add(IntTag.valueOf(4)); list.add(IntTag.valueOf(5)); t.put("list", list);
+    CompoundTag inner = new CompoundTag(); inner.putString("k", "v"); t.put("inner", inner);
+    NbtIo.writeCompressed(t, Path.of(a[0]));
+    System.out.println("ok");
+  }
+}

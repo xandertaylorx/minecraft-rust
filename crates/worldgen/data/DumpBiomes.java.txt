@@ -1,0 +1,12 @@
+import net.minecraft.world.level.biome.*;
+import net.minecraft.resources.ResourceKey;
+public class DumpBiomes {
+  public static void main(String[] a) throws Exception {
+    net.minecraft.SharedConstants.tryDetectVersion(); net.minecraft.server.Bootstrap.bootStrap();
+    var list = MultiNoiseBiomeSourceParameterList.knownPresets().get(MultiNoiseBiomeSourceParameterList.Preset.OVERWORLD);
+    for (var pair : list.values()) {
+      var p = pair.getFirst();
+      System.out.println("@ " + p.temperature().min()+" "+p.temperature().max()+" "+p.humidity().min()+" "+p.humidity().max()+" "+p.continentalness().min()+" "+p.continentalness().max()+" "+p.erosion().min()+" "+p.erosion().max()+" "+p.depth().min()+" "+p.depth().max()+" "+p.weirdness().min()+" "+p.weirdness().max()+" "+p.offset()+" "+pair.getSecond().identifier().getPath());
+    }
+  }
+}

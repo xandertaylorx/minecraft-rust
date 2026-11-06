@@ -1,0 +1,61 @@
+import net.minecraft.stripped.universe.*;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.entity.player.Input;
+import java.util.*;
+public class GoldSpace {
+  static void p(String s){ System.out.println("@ " + s); }
+  public static void main(String[] a) {
+    net.minecraft.SharedConstants.tryDetectVersion(); net.minecraft.server.Bootstrap.bootStrap();
+    var layout = new UniverseSurfaceLayout(12345L);
+    var cat = new UniverseCatalog(12345L);
+    double[][] pts = {{0,0},{100,-300},{4096,0},{4300,200},{-2500,-2600},{9000,9000},{16384,0},{-8193,5},{1536,512},{6000,2900},{20000,-30000}};
+    for (double[] q : pts) {
+      Planet s = layout.surfaceAt(q[0], q[1]);
+      p("SURF " + q[0] + " " + q[1] + " " + (s == null ? "none" : s.id().system() + "/" + s.id().body()) + " " + layout.nearby(q[0], q[1]).size() + " " + layout.isEarth(q[0], q[1]));
+    }
+    p("SECOND " + layout.secondPlanet().id().body());
+    var sys = cat.system(new SystemId(1,0,0));
+    Vec3[] cams = {new Vec3(4096, 100, 0), new Vec3(4096, 700, 0), new Vec3(5000, 300, 800), new Vec3(4096, -2000, 0), new Vec3(4600, 235, 10), new Vec3(0, 50, 0)};
+    for (Planet b : cat.system(SystemId.SOL).bodies()) {
+      for (Vec3 cam : cams) {
+        double d = PlanetAtmosphere.distance(b, cam, 120);
+        p("ATM " + b.id().body() + " " + cam.x + " " + cam.y + " " + cam.z + " " + d + " " + PlanetAtmosphere.density(b, d) + " " + PlanetCloudField.opacity(b, cam));
+      }
+      p("CLOUD " + b.id().body() + " " + PlanetCloudField.height(b));
+      StringBuilder sb = new StringBuilder("CELLS " + b.id().body() + " ");
+      var c = b.nativeCenter();
+      for (int i = 0; i < 64; i++) { sb.append(PlanetCloudField.occupied(b, c.x + (i*37%200-100)*b.radius()/100.0, c.z + (i*53%200-100)*b.radius()/100.0) ? '1' : '0'); }
+      p(sb.toString());
+    }
+    // flight
+    Vec3 v = Vec3.ZERO; float yaw = 10, pitch = 0;
+    for (int i = 0; i < 400; i++) {
+      Input in = new Input((i/17)%2==0, (i/31)%5==0, (i/13)%7==0, (i/11)%9==0, (i/23)%4==0, (i/29)%6==0, (i/19)%3!=0);
+      float py = ((i*3)%360)-180, pp = ((i*5)%170)-85;
+      double alt = 100 + i*15;
+      var f = ShipFlightPhysics.step(v, yaw, pitch, py, pp, in, alt, (i/97)%4!=3, Math.max(0, alt-140-(i%50)));
+      v = f.velocity(); yaw = f.yaw(); pitch = f.pitch();
+      if (i % 5 == 0) p("FLY " + i + " " + v.x + " " + v.y + " " + v.z + " " + yaw + " " + pitch + " " + f.pulse());
+    }
+    // pulse nav
+    var bodies = cat.system(SystemId.SOL).bodies();
+    Vec3 pos = new Vec3(-3000, 600, 20);
+    for (double yawd = -10; yawd <= 10; yawd += 4) {
+      Vec3 look = Vec3.directionFromRotation(0, (float)(-90 + yawd));
+      Planet t = PulseNavigation.acquire(pos, look, bodies);
+      p("ACQ " + yawd + " " + (t == null ? -1 : t.id().body()) + " " + PulseNavigation.speed(5000 + yawd*100, 300) + " " + (t == null ? "-" : PulseNavigation.direction(pos, t).toString()));
+    }
+    // streaming
+    Vec3[][] sv = {{new Vec3(100,0,50), new Vec3(5,0,3)}, {new Vec3(-4000.5,0,70), new Vec3(-9,0,0.2)}, {new Vec3(0,0,0), new Vec3(0.1,0,0)}, {new Vec3(33,0,33), new Vec3(0,0,-12)}};
+    for (Vec3[] q : sv) for (int vd : new int[]{2, 6}) {
+      StringBuilder sb = new StringBuilder("STREAM " + vd + " ");
+      for (var cp : SurfaceStreamPlanner.predict(q[0], q[1], vd)) sb.append(cp.x).append(',').append(cp.z).append(';');
+      p(sb.toString());
+    }
+    // positions
+    var up = new UniversePosition(new SystemId(2,0,-1), new Vec3(9000, -20000, 5));
+    p("POS " + up.sector() + " " + up.local().x + " " + up.local().y + " " + up.local().z);
+    var rel = up.relativeTo(new UniversePosition(SystemId.SOL, new Vec3(1,2,3)));
+    p("REL " + rel.x + " " + rel.y + " " + rel.z);
+  }
+}

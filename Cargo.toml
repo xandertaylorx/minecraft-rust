@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/universe", "crates/nbt", "crates/game", "crates/worldgen"]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"

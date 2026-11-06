@@ -1,0 +1,27 @@
+import net.minecraft.world.level.levelgen.*;
+import net.minecraft.world.level.biome.Climate;
+import net.minecraft.data.worldgen.*;
+import net.minecraft.core.*;
+import net.minecraft.resources.*;
+import net.minecraft.core.registries.Registries;
+public class GoldNoise {
+  static void p(String s){ System.out.println("@ " + s); }
+  public static void main(String[] a) throws Exception {
+    net.minecraft.SharedConstants.tryDetectVersion(); net.minecraft.server.Bootstrap.bootStrap();
+    HolderLookup.Provider lookup = net.minecraft.data.registries.VanillaRegistries.createLookup();
+    for (long seed : new long[]{12345L, -987654321L}) {
+      RandomState rs = RandomState.create(lookup, NoiseGeneratorSettings.OVERWORLD, seed);
+      var r = rs.router();
+      int[][] pts = {{0,64,0},{100,70,-250},{-1234,0,987},{3000,-40,-3000},{517,120,33},{-64,200,-64},{9000,63,9000},{-4096,10,2048},{15,-60,15},{1000,95,-1000},{256,150,256},{-777,30,777}};
+      for (int[] q : pts) {
+        var ctx = new DensityFunction.SinglePointContext(q[0], q[1], q[2]);
+        StringBuilder sb = new StringBuilder("R " + seed + " " + q[0] + " " + q[1] + " " + q[2]);
+        for (DensityFunction f : new DensityFunction[]{r.continents(), r.erosion(), r.depth(), r.ridges(), r.temperature(), r.vegetation(), r.finalDensity(), r.preliminarySurfaceLevel(), r.barrierNoise(), r.fluidLevelFloodednessNoise(), r.fluidLevelSpreadNoise(), r.lavaNoise(), r.veinToggle(), r.veinRidged(), r.veinGap()})
+          sb.append(' ').append(f.compute(ctx));
+        p(sb.toString());
+        Climate.TargetPoint t = rs.sampler().sample(q[0] >> 2, q[1] >> 2, q[2] >> 2);
+        p("C " + seed + " " + q[0] + " " + q[1] + " " + q[2] + " " + t.temperature() + " " + t.humidity() + " " + t.continentalness() + " " + t.erosion() + " " + t.depth() + " " + t.weirdness());
+      }
+    }
+  }
+}

@@ -1,0 +1,6 @@
+[package]
+name = "universe"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
